@@ -707,7 +707,7 @@ index 0000000..24c490c
 +
 +#endif
 diff --git a/src/usb/usb_descriptors.c b/src/usb/usb_descriptors.c
-index b6b8c61..abf5268 100644
+index b6b8c61..c176a70 100644
 --- a/src/usb/usb_descriptors.c
 +++ b/src/usb/usb_descriptors.c
 @@ -328,7 +328,14 @@ uint8_t const desc_bos[] = {
@@ -725,3 +725,28 @@ index b6b8c61..abf5268 100644
      // Microsoft OS 2.0 descriptor
      TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT)
  };
+@@ -345,10 +352,24 @@ uint8_t const *tud_descriptor_bos_cb(void) {
+ 
+ // array of pointer to string descriptors
+ char *string_desc_itf[5] = {0};
++#ifdef ESP_PLATFORM
++/* esp32s3-fido: own manufacturer / product names (shown by the OS). */
++#ifndef ESP32S3_FIDO_USB_MANUFACTURER
++#define ESP32S3_FIDO_USB_MANUFACTURER "Alice Core"
++#endif
++#ifndef ESP32S3_FIDO_USB_PRODUCT
++#define ESP32S3_FIDO_USB_PRODUCT "ESP32-S3 FIDO2 Key"
++#endif
++#endif
+ char const *string_desc_arr [] = {
+     (const char[]) { 0x09, 0x04 }, // 0: is supported language is English (0x0409)
++#ifdef ESP_PLATFORM
++    ESP32S3_FIDO_USB_MANUFACTURER,       // 1: Manufacturer
++    ESP32S3_FIDO_USB_PRODUCT,            // 2: Product
++#else
+     "Pol Henarejos",                     // 1: Manufacturer
+     "Pico Key",                       // 2: Product
++#endif
+     "11223344",                      // 3: Serials, should use chip ID
+     "MAC"                   // 4: MAC address string, handled separately
+     , "HID Interface"

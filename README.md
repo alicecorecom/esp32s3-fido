@@ -34,6 +34,7 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 | 挿したときの Chrome の通知 | 「Pico Key detected」が毎回出る | 出ない |
 | LED | 常に点滅 | 待機中は消灯、必要なときだけ光る |
 | 乱数 | SAR ADC エントロピーを常時有効（タッチが使えない） | 起動時に CTR-DRBG を初期化 |
+| USB の VID/PID・名前 | Raspberry Pi の番号（2E8A:10FE）、「Pol Henarejos / Pico Key」 | Espressif の VID（303A）、「Alice Core / ESP32-S3 FIDO2 Key」 |
 | 作者のセキュアブート | 有効化すると作者署名のファームしか起動しない | 使わない |
 
 ## 必要なもの
@@ -207,6 +208,19 @@ Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を�
 - 緑は「本人確認に成功した」ときだけ光る
 - **色の順番**：LED ドライバは WS2812 標準の G→R→B で送るが、SuperMini には R→G→B で受け取る LED が載っている個体がある。
   既定は `PHY_LED_ORDER_GRB`（R と G を入れ替えて送る）。標準の WS2812 なら `-DESP32S3_FIDO_LED_ORDER=PHY_LED_ORDER_RGB` を指定する
+
+</details>
+
+<details>
+<summary><b>8. USB の VID/PID と名前</b>（pico-fido の <code>CMakeLists.txt</code>、<code>src/usb/usb_descriptors.c</code>、<code>idf.ps1</code>）</summary>
+
+本家の既定は Raspberry Pi の VID（2E8A:10FE）で、メーカー名は作者名になっている。
+改造版は、ESP チップ搭載機器に無償で PID を割り当てている [Espressif の VID 0x303A](https://github.com/espressif/usb-pids) を使う。
+
+- VID/PID は `idf.ps1` の `$UsbVid` / `$UsbPid` で指定する（`-D USB_VID=… -D USB_PID=…` で CMake に渡す）
+- 現在の PID 0x8000 は Espressif のテスト用 PID で、専用の PID が割り当てられるまでの仮の値
+- メーカー名・製品名は `ESP32S3_FIDO_USB_MANUFACTURER` / `ESP32S3_FIDO_USB_PRODUCT` で変えられる
+- 認証器としての動作は VID/PID に依存しない（OS は HID の FIDO 用途ページで見分ける）。変えても登録は消えない
 
 </details>
 
