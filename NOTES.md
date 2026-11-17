@@ -50,6 +50,6 @@
 
 ## 予定
 
-- Espressif に PID を申請する（github.com/espressif/usb-pids に PR）。割り当てられたら `idf.ps1` の `$UsbPid` を変えて書き直す。今は仮に 303A:8000（3台目で動作確認済み、2026-11-18）
+- Espressif に PID を申請済み：0x83FB（https://github.com/espressif/usb-pids/pull/455、2026-11-18）。マージ時に番号が変わることがある。割り当てられたら `idf.ps1` の `$UsbPid` を変えて書き直す。今は仮に 303A:8000（3台目で動作確認済み、2026-11-18）
 - しばらく 3台目を B のまま使い、問題がなければ C（release）へ
 - ケースとタッチ電極（熱収縮チューブ Φ16〜20mm、銅テープ、カプトン、細い線）→ `tools/touchprobe` で測り直す
