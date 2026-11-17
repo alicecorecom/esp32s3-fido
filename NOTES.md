@@ -52,4 +52,8 @@
 
 - Espressif に PID を申請済み：0x83F3（https://github.com/espressif/usb-pids/pull/455、2026-11-18）。CI は main の末尾の次の番号しか通さないので、ほかの PR が先にマージされたら付け直しが要る。割り当てられたら `idf.ps1` の `$UsbPid` を変えて書き直す。今は仮に 303A:8000（3台目で動作確認済み、2026-11-18）
 - しばらく 3台目を B のまま使い、問題がなければ C（release）へ
+  - release ビルドでは CCID を外す（pico-fido の `ENABLE_OTP_APP` / `ENABLE_OATH_APP` を無効にすると CCID ごと外れる）。dev / devenc は残す
+    - 理由: CCID の rescue アプレットで、設定の書き換え（本人確認の待ち時間を 0 にするなど）と、デバイス鍵での任意の署名ができる。どちらも本人確認は要るが、FIDO2 だけなら不要な窓口。release 後はファームを直せないので閉じておく
+    - 失うもの: `tools/ccid/getinfo.py`、OTP / OATH、PicoKey App からの設定変更（設定は全部ファームの既定値に入れてあるので困らない）
+    - release の前に devenc で一度試す: FIDO2 のログインが通ること、デバイスマネージャーから CCID（スマート カード読み取り装置・不明なスマートカード）が消えること
 - ケースとタッチ電極（熱収縮チューブ Φ16〜20mm、銅テープ、カプトン、細い線）→ `tools/touchprobe` で測り直す
