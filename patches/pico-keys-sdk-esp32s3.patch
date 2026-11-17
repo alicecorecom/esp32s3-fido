@@ -518,14 +518,14 @@ index 5f1621f..d108c59 100644
      word <<= 32;
 diff --git a/src/touch_button.c b/src/touch_button.c
 new file mode 100644
-index 0000000..1e1bf92
+index 0000000..66bff4e
 --- /dev/null
 +++ b/src/touch_button.c
 @@ -0,0 +1,138 @@
 +/*
 + * This file is part of esp32s3-fido, a modified version of the Pico Keys SDK
 + * (https://github.com/polhenarejos/pico-keys-sdk).
-+ * Copyright (c) 2026 esp32s3-fido contributors.
++ * Copyright (c) 2026 Alice Core.
 + *
 + * This program is free software: you can redistribute it and/or modify
 + * it under the terms of the GNU Affero General Public License as published by
@@ -662,14 +662,14 @@ index 0000000..1e1bf92
 +#endif
 diff --git a/src/touch_button.h b/src/touch_button.h
 new file mode 100644
-index 0000000..e92a689
+index 0000000..24c490c
 --- /dev/null
 +++ b/src/touch_button.h
 @@ -0,0 +1,40 @@
 +/*
 + * This file is part of esp32s3-fido, a modified version of the Pico Keys SDK
 + * (https://github.com/polhenarejos/pico-keys-sdk).
-+ * Copyright (c) 2026 esp32s3-fido contributors.
++ * Copyright (c) 2026 Alice Core.
 + *
 + * This program is free software: you can redistribute it and/or modify
 + * it under the terms of the GNU Affero General Public License as published by

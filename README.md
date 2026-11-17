@@ -190,7 +190,7 @@ FIDO2 の動作確認:
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos で、AGPL-3.0（バージョン3のみ、「以降のバージョン」は含まない）。
   `patches/` の改造は、その派生物なので同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）も AGPL-3.0-only
+- このリポジトリで新しく書いたもの（Copyright (c) 2026 Alice Core。`idf.ps1`、`check_no_radio.ps1`、`config/`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）も AGPL-3.0-only
 - 改造した箇所には、ソース中に `esp32s3-fido:` のコメントを入れてある（AGPL 第5条 a の「変更した旨の表示」）。改造の一覧と時期は、この README と git の履歴にある
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスのまま。ビルドしたファームに含まれる
 
