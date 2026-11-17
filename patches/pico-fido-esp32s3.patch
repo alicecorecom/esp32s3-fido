@@ -1,0 +1,16 @@
+diff --git a/src/fido/fido.c b/src/fido/fido.c
+index 93120fd..130b163 100644
+--- a/src/fido/fido.c
++++ b/src/fido/fido.c
+@@ -596,7 +596,10 @@ bool check_user_presence_for_credential(bool require_button) {
+ }
+ 
+ void fido_led_3_blinks(void) {
+-#ifndef ENABLE_EMULATION
++    /* esp32s3-fido: no blink on ESP32. Windows/browsers send silent requests
++     * (no user presence) before the real one, and green is reserved for
++     * "presence accepted" (pico-keys-sdk button.c). */
++#if !defined(ENABLE_EMULATION) && !defined(ESP_PLATFORM)
+     led_blink_n_times(3, LED_COLOR_GREEN, 100, 100);
+ #endif
+ }

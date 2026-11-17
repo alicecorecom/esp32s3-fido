@@ -2,7 +2,7 @@
 
 ESP32-S3 SuperMini（ピンヘッダなしの予備基板）を FIDO2 セキュリティキーにする実験。
 [pico-fido](https://github.com/polhenarejos/pico-fido) v8.2（AGPL-3.0）を submodule で取り込み、
-`patches/pico-keys-sdk-esp32s3.patch` で pico-keys-sdk を改造している。
+`patches/` の2つの patch で改造している（`pico-keys-sdk-esp32s3.patch` が本体、`pico-fido-esp32s3.patch` は LED の1か所だけ）。
 
 > **サブの鍵・学習用。** ESP32-S3 には専用のセキュリティチップが無く、グリッチ攻撃などへの耐性は市販キーに及ばない。
 > メインの鍵は市販品を使い、このキーは必ず他の手段（市販キーやリカバリーコード）と併用する。
@@ -10,7 +10,7 @@ ESP32-S3 SuperMini（ピンヘッダなしの予備基板）を FIDO2 セキュ�
 > **技適なし基板なので無線は使わない。** pico-fido は bt / esp_wifi コンポーネントを取り込まない。
 > ビルド後に `.\check_no_radio.ps1` で、ELF に `esp_wifi_*` / `esp_bt_*` などが無いことを確認する。
 
-## 改造の内容（`patches/pico-keys-sdk-esp32s3.patch`）
+## 改造の内容（`patches/`）
 
 ### 1. eFuse の鍵を HMAC 専用にする（`src/otp/otp_esp32.c`）
 
@@ -86,8 +86,11 @@ Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を�
 |---|---|---|
 | 挿して USB が使えるようになった | 赤点滅 → 緑点滅（ずっと） | **青で0.5秒光って消灯** |
 | 待機中・PC がスリープ中 | 緑点滅 / 青点滅 | 消灯 |
-| 処理中 | 緑で細かく点滅 | 同じ |
-| タッチ / BOOT 待ち | 黄でほぼ点灯 | **白で速く点滅**（0.15秒） |
+| 処理中 | 緑で細かく点滅 | 消灯 |
+| 本人確認なしの要求（Windows が本番の前に送る問い合わせなど）の後 | 緑で3回点滅 | 光らない（`pico-fido` 側の `fido_led_3_blinks()`） |
+| タッチ / BOOT 待ち | 黄でほぼ点灯 | **青で速く点滅**（0.15秒、明るさ 6/15 = `ESP32S3_FIDO_BUTTON_BTNESS`） |
+| タッチ / BOOT された（成功） | — | **緑で0.5秒点灯** |
+| 時間切れ・キャンセル（失敗） | — | **赤で0.5秒点灯** |
 | 挿して3秒経っても USB が使えない（充電専用ケーブルなど） | 赤点滅 | 赤点滅（0.5秒、モバイルバッテリーで確認済み） |
 | 起動時の致命的エラー（eFuse 鍵・データ領域） | 消灯のまま止まる | **赤で速く点滅**（0.15秒） |
 
@@ -95,6 +98,7 @@ Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を�
   そのままだと赤と緑が入れ替わる（本家のままだと、正常に接続していても「赤点滅」に見えていた）。
   既定を `PHY_LED_ORDER_GRB`（r と g を入れ替えて送る）にした。標準の WS2812 なら `-DESP32S3_FIDO_LED_ORDER=PHY_LED_ORDER_RGB`
 - 起動後3秒間は、USB が上がっていなくても消灯にしている（挿すたびに赤が一瞬光らないように）
+- 緑は「本人確認に成功した」ときだけ光る（処理中や、本人確認なしの要求では光らせない）
 
 | | 本家 | 改造版 |
 |---|---|---|
@@ -124,6 +128,7 @@ Git Bash からは動かない（MSys 非対応）。PowerShell で実行する�
 
 ```powershell
 git submodule update --init --recursive
+git -C pico-fido apply ../patches/pico-fido-esp32s3.patch
 git -C pico-fido/pico-keys-sdk apply ../../patches/pico-keys-sdk-esp32s3.patch
 .\idf.ps1 dev build          # 暗号化なし          -> build\dev
 .\idf.ps1 devenc build       # 開発モードで暗号化  -> build\devenc

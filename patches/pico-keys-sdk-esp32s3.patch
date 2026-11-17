@@ -50,7 +50,7 @@ index 365212e..5c375d5 100644
      ${CMAKE_CURRENT_LIST_DIR}/src/signal.c
      ${CMAKE_CURRENT_LIST_DIR}/src/vault.c
 diff --git a/src/button.c b/src/button.c
-index 96cf21a..e6c9255 100644
+index 96cf21a..1b43396 100644
 --- a/src/button.c
 +++ b/src/button.c
 @@ -53,7 +53,22 @@ volatile bool force_button_wait = false;
@@ -76,7 +76,19 @@ index 96cf21a..e6c9255 100644
      int boot_state = gpio_get_level(BOOT_PIN);
      return boot_state == 0;
  }
-@@ -191,7 +206,15 @@ uint32_t button_timeout_seconds(void) {
+@@ -162,6 +177,11 @@ void button_wait_poll(void) {
+     async_button_wait = false;
+     req_button_pending = false;
+     led_set_mode(async_button_led_mode);
++#ifdef ESP_PLATFORM
++    /* esp32s3-fido: show the outcome of the presence check for 0.5 s:
++     * green = touched / BOOT pressed, red = timed out or cancelled. */
++    led_blink_n_times(1, result == BUTTON_EV_PRESSED ? LED_COLOR_GREEN : LED_COLOR_RED, 500, 1);
++#endif
+     uint32_t flag = 0;
+     if (result == BUTTON_EV_PRESSED) {
+         flag = EV_BUTTON_PRESSED;
+@@ -191,7 +211,15 @@ uint32_t button_timeout_seconds(void) {
         it will not be possible to indicate button press unless it
         is commissioned. */
  #ifndef ENABLE_EMULATION
@@ -229,22 +241,27 @@ index 145cafb..eff26bc 100644
      static uint32_t stop_ms = 0;
      static uint32_t last_led_update_ms = 0;
 diff --git a/src/led/led.h b/src/led/led.h
-index 220ebd5..aae183f 100644
+index 220ebd5..cf46fed 100644
 --- a/src/led/led.h
 +++ b/src/led/led.h
-@@ -51,16 +51,32 @@ enum {
+@@ -51,16 +51,37 @@ enum {
  #define LED_ON_NO_BLINK     ((1000 << LED_ON_SHIFT) | (0 << LED_OFF_SHIFT))
  
  enum  {
 +#ifdef ESP_PLATFORM
 +    /* esp32s3-fido: quiet LED. Dark while idle (a single blue flash when USB
-+     * comes up is done in led.c), white fast blink while waiting for the
-+     * touch pad / BOOT, red blink for errors. Values must stay distinct. */
++     * comes up is done in led.c), blue fast blink while waiting for the
++     * touch pad / BOOT, red blink for errors. Processing is dark too, so a
++     * green light only ever means "presence accepted" (button.c).
++     * Values must stay distinct (code compares led_get_mode() against them). */
 +    MODE_NOT_MOUNTED = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
 +    MODE_MOUNTED     = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_OFF << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
 +    MODE_SUSPENDED   = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_OFF << LED_COLOR_SHIFT) | (1000 << LED_ON_SHIFT) | (2000 << LED_OFF_SHIFT),
-+    MODE_PROCESSING  = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | (50 << LED_ON_SHIFT) | (50 << LED_OFF_SHIFT),
-+    MODE_BUTTON      = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_WHITE << LED_COLOR_SHIFT) | (150 << LED_ON_SHIFT) | (150 << LED_OFF_SHIFT),
++    MODE_PROCESSING  = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_OFF << LED_COLOR_SHIFT) | (50 << LED_ON_SHIFT) | (50 << LED_OFF_SHIFT),
++#ifndef ESP32S3_FIDO_BUTTON_BTNESS
++#define ESP32S3_FIDO_BUTTON_BTNESS 6   /* 0-15 */
++#endif
++    MODE_BUTTON      = (ESP32S3_FIDO_BUTTON_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_BLUE << LED_COLOR_SHIFT) | (150 << LED_ON_SHIFT) | (150 << LED_OFF_SHIFT),
 +    MODE_FATAL       = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (150 << LED_ON_SHIFT) | (150 << LED_OFF_SHIFT),
 +#else
      MODE_NOT_MOUNTED = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
