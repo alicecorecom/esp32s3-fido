@@ -518,10 +518,28 @@ index 5f1621f..d108c59 100644
      word <<= 32;
 diff --git a/src/touch_button.c b/src/touch_button.c
 new file mode 100644
-index 0000000..702a672
+index 0000000..1e1bf92
 --- /dev/null
 +++ b/src/touch_button.c
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,138 @@
++/*
++ * This file is part of esp32s3-fido, a modified version of the Pico Keys SDK
++ * (https://github.com/polhenarejos/pico-keys-sdk).
++ * Copyright (c) 2026 esp32s3-fido contributors.
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Affero General Public License as published by
++ * the Free Software Foundation, version 3.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * Affero General Public License for more details.
++ *
++ * You should have received a copy of the GNU Affero General Public License
++ * along with this program. If not, see <https://www.gnu.org/licenses/>.
++ */
++
 +/* esp32s3-fido: a capacitive touch pad works as the presence button in
 + * addition to BOOT. Measured on a SuperMini with a vinyl-insulated wire on
 + * GPIO1: idle ~16100 (noise +-10), hand nearby <= +2%, touch through the
@@ -644,10 +662,28 @@ index 0000000..702a672
 +#endif
 diff --git a/src/touch_button.h b/src/touch_button.h
 new file mode 100644
-index 0000000..9c47e44
+index 0000000..e92a689
 --- /dev/null
 +++ b/src/touch_button.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,40 @@
++/*
++ * This file is part of esp32s3-fido, a modified version of the Pico Keys SDK
++ * (https://github.com/polhenarejos/pico-keys-sdk).
++ * Copyright (c) 2026 esp32s3-fido contributors.
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Affero General Public License as published by
++ * the Free Software Foundation, version 3.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * Affero General Public License for more details.
++ *
++ * You should have received a copy of the GNU Affero General Public License
++ * along with this program. If not, see <https://www.gnu.org/licenses/>.
++ */
++
 +/* esp32s3-fido: capacitive touch pad used as the user-presence button. */
 +#ifndef TOUCH_BUTTON_H
 +#define TOUCH_BUTTON_H

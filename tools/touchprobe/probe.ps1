@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-only
 # Build the touch probe (same ESP-IDF setup as ..\..\idf.ps1).
 #   .\probe.ps1 build
 #   (flash: esptool write-flash --encrypt 0x20000 build\touchprobe.bin)

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-only
 # Fails if a built ELF contains Wi-Fi / Bluetooth code (this board has no 技適).
 #   .\check_no_radio.ps1            # checks every build\<profile>\pico_fido.elf
 $ErrorActionPreference = 'Stop'

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-only
 # Run ESP-IDF's idf.py for this project without export.ps1.
 # (export.ps1 calls `python` from PATH, which is the Microsoft Store stub on this PC.)
 #

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 esp32s3-fido contributors
 // Touch probe: runs the exact touch_button.c used by the firmware and prints
 // its state over the USB-Serial/JTAG console, 10 times per second.
 // Boot order mimics the patched pico-keys-sdk: SAR ADC entropy on (DRBG

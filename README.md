@@ -183,3 +183,17 @@ FIDO2 の動作確認:
 - Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」で PIN の設定・変更・リセット
 - https://webauthn.io で登録・ログイン（Edge / Chrome）
 - 本人確認は **BOOT** か **GPIO1 のタッチパッド**（触って離す。15秒で時間切れ）
+
+## ライセンス
+
+**GNU Affero General Public License v3.0 のみ（AGPL-3.0-only）。** 全文は [`LICENSE`](LICENSE)。
+
+- 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos で、AGPL-3.0（バージョン3のみ、「以降のバージョン」は含まない）。
+  `patches/` の改造は、その派生物なので同じライセンスに従う
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）も AGPL-3.0-only
+- 改造した箇所には、ソース中に `esp32s3-fido:` のコメントを入れてある（AGPL 第5条 a の「変更した旨の表示」）。改造の一覧と時期は、この README と git の履歴にある
+- ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスのまま。ビルドしたファームに含まれる
+
+**ファームを書き込んだキーを人に渡すとき**（AGPL 第6条）は、対応するソースを手に入れられるようにする。
+このリポジトリの URL と、ビルドに使ったコミット（submodule の pico-fido v8.2 / pico-keys-sdk 50699e5 を含む）を伝えればよい。
+自分だけで使う分には、この義務はかからない。
