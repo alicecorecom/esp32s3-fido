@@ -1,0 +1,3 @@
+[submodule "pico-fido"]
+	path = pico-fido
+	url = https://github.com/polhenarejos/pico-fido.git

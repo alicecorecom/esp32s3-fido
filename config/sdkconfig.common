@@ -1,0 +1,6 @@
+# Settings shared by every profile (layered on top of pico-keys-sdk's sdkconfig.defaults).
+CONFIG_IDF_TARGET="esp32s3"
+
+# This board has no 技適 (Japanese radio certification): the radio must never be used.
+CONFIG_BT_ENABLED=n
+CONFIG_ESP_WIFI_ENABLED=n
