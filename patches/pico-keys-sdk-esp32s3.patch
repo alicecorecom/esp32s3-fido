@@ -50,10 +50,10 @@ index 365212e..5c375d5 100644
      ${CMAKE_CURRENT_LIST_DIR}/src/signal.c
      ${CMAKE_CURRENT_LIST_DIR}/src/vault.c
 diff --git a/src/button.c b/src/button.c
-index 96cf21a..1b43396 100644
+index 96cf21a..dfa3920 100644
 --- a/src/button.c
 +++ b/src/button.c
-@@ -53,7 +53,22 @@ volatile bool force_button_wait = false;
+@@ -53,10 +53,44 @@ volatile bool force_button_wait = false;
  
  #if !defined(ENABLE_EMULATION)
  #ifdef ESP_PLATFORM
@@ -66,17 +66,49 @@ index 96cf21a..1b43396 100644
 +#include "touch_button.h"
 +#endif
 +
++/* Touch only counts while "armed": a touch that is already active when a
++ * presence wait starts (pad held, or a stuck level waiting to be recalibrated
++ * by touch_button.c) is ignored until it reads released once. So a stuck pad
++ * can neither approve a request on its own nor block BOOT. */
++static bool touch_armed = true;
++
  static bool picok_board_button_read(void) {
+     int boot_state = gpio_get_level(BOOT_PIN);
 +#if ESP32S3_FIDO_TOUCH_CHAN >= 0
 +    touch_button_start(ESP32S3_FIDO_TOUCH_CHAN);  /* no-op after the first call */
-+    if (touch_button_pressed()) {
++    bool touch = touch_button_pressed();
++    if (!touch) {
++        touch_armed = true;
++    }
++    if (touch && touch_armed) {
 +        return true;
 +    }
 +#endif
-     int boot_state = gpio_get_level(BOOT_PIN);
      return boot_state == 0;
  }
-@@ -162,6 +177,11 @@ void button_wait_poll(void) {
++
++static void picok_board_button_disarm_if_held(void) {
++#if ESP32S3_FIDO_TOUCH_CHAN >= 0
++    touch_button_start(ESP32S3_FIDO_TOUCH_CHAN);
++    if (touch_button_pressed()) {
++        touch_armed = false;
++    }
++#endif
++}
+ #elif defined(PICO_PLATFORM)
+ static bool __no_inline_not_in_flash_func(picok_get_bootsel_button)(void) {
+     const uint CS_PIN_INDEX = 1;
+@@ -129,6 +163,9 @@ void button_wait_start_timeout(uint32_t timeout_seconds) {
+     signal_emit_param(SIGNAL_USER_PRESENCE_REQUEST, &data);
+     cancel_button = false;
+     async_button_wait = true;
++#ifdef ESP_PLATFORM
++    picok_board_button_disarm_if_held();
++#endif
+     async_button_pressed = picok_board_button_read();
+     async_button_started = board_millis();
+     async_button_timeout = button_timeout;
+@@ -162,6 +199,11 @@ void button_wait_poll(void) {
      async_button_wait = false;
      req_button_pending = false;
      led_set_mode(async_button_led_mode);
@@ -88,7 +120,7 @@ index 96cf21a..1b43396 100644
      uint32_t flag = 0;
      if (result == BUTTON_EV_PRESSED) {
          flag = EV_BUTTON_PRESSED;
-@@ -191,7 +211,15 @@ uint32_t button_timeout_seconds(void) {
+@@ -191,7 +233,15 @@ uint32_t button_timeout_seconds(void) {
         it will not be possible to indicate button press unless it
         is commissioned. */
  #ifndef ENABLE_EMULATION
@@ -188,10 +220,10 @@ index 5ac7185..4e5c794 100644
      data_end_addr = part0->size;
      FLASH_SIZE_BYTES = part0->size;
 diff --git a/src/led/led.c b/src/led/led.c
-index 145cafb..eff26bc 100644
+index 145cafb..45d64a8 100644
 --- a/src/led/led.c
 +++ b/src/led/led.c
-@@ -53,8 +53,48 @@ void led_blink_n_times(uint8_t count, uint8_t color, uint32_t on_ms, uint32_t of
+@@ -53,8 +53,50 @@ void led_blink_n_times(uint8_t count, uint8_t color, uint32_t on_ms, uint32_t of
      blink_pending = true;
  }
  
@@ -223,7 +255,9 @@ index 145cafb..eff26bc 100644
 +#include "freertos/FreeRTOS.h"
 +#include "freertos/task.h"
 +void led_fatal_halt(void) {
-+    led_init();             /* may run before the normal led_init() */
++    if (led_driver == NULL) {
++        led_init();         /* called before the normal led_init() */
++    }
 +    led_set_mode(MODE_FATAL);
 +    for (;;) {
 +        led_blinking_task();
@@ -305,6 +339,19 @@ index f93a2f8..c8c79ea 100644
          case PHY_LED_ORDER_RBG:
              return NP_RGB(r, b, g);
          case PHY_LED_ORDER_GRB:
+diff --git a/src/main.c b/src/main.c
+index 7a910ac..d3ef4f0 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -200,7 +200,7 @@ int main(void) {
+     if (phy_data.usb_product_present) {
+         tusb_cfg.string_descriptor[2] = phy_data.usb_product;
+     }
+-    static char tmps[5][32];
++    static char tmps[5][64];  /* esp32s3-fido: "<product> <interface>" (was 32) */
+     const int max_desc_slots = 8 - 6;
+     const int itf_desc_count = ITF_TOTAL < max_desc_slots ? ITF_TOTAL : max_desc_slots;
+     for (int i = 0; i < itf_desc_count; i++) {
 diff --git a/src/otp/otp_esp32.c b/src/otp/otp_esp32.c
 index e75ade7..46f4327 100644
 --- a/src/otp/otp_esp32.c
@@ -443,6 +490,20 @@ index e75ade7..46f4327 100644
 +    *otp_key_1_out = _otp_key_1;
 +    *otp_key_2_out = _otp_key_2;
  }
+diff --git a/src/rescue.c b/src/rescue.c
+index 772fa3c..5ff70e9 100644
+--- a/src/rescue.c
++++ b/src/rescue.c
+@@ -331,7 +331,8 @@ static int cmd_keydev_sign(void) {
+ }
+ 
+ static void led_3_blinks(void) {
+-#ifndef ENABLE_EMULATION
++    /* esp32s3-fido: no green flash on ESP, green only means "presence accepted" */
++#if !defined(ENABLE_EMULATION) && !defined(ESP_PLATFORM)
+     led_blink_n_times(3, LED_COLOR_GREEN, 100, 100);
+ #endif
+ }
 diff --git a/src/rng/hwrng.c b/src/rng/hwrng.c
 index 5f1621f..d108c59 100644
 --- a/src/rng/hwrng.c
@@ -518,10 +579,10 @@ index 5f1621f..d108c59 100644
      word <<= 32;
 diff --git a/src/touch_button.c b/src/touch_button.c
 new file mode 100644
-index 0000000..66bff4e
+index 0000000..f587676
 --- /dev/null
 +++ b/src/touch_button.c
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,159 @@
 +/*
 + * This file is part of esp32s3-fido, a modified version of the Pico Keys SDK
 + * (https://github.com/polhenarejos/pico-keys-sdk).
@@ -546,7 +607,11 @@ index 0000000..66bff4e
 + * insulation ~+15%, bare metal > +500%. Touched = smooth > baseline + 8%.
 + * The hardware benchmark is not used: it follows a slow touch through the
 + * insulation. Our baseline drops at once (so touching while plugging in only
-+ * delays detection until release) and rises slowly only while untouched. */
++ * delays detection until release) and rises slowly only while untouched.
++ * A level that stays above the threshold for TOUCH_STUCK_MS (drift, a new
++ * host ground, the wire lying on metal) is taken as the new baseline, so the
++ * pad cannot stay "pressed" forever. button.c never counts such a release as a
++ * presence (a touch only counts if it starts after the wait started). */
 +#ifdef ESP_PLATFORM
 +#include <stdio.h>
 +#include "touch_button.h"
@@ -555,7 +620,9 @@ index 0000000..66bff4e
 +#include "freertos/task.h"
 +
 +#define TOUCH_ON_PCT      8u    /* touched above baseline + 8 % */
-+#define TOUCH_TRACK_PCT   4u    /* baseline may rise only while below +4 % */
++#define TOUCH_TRACK_PCT   4u    /* below +4 %: baseline rises in ~10 s */
++                                /* +4..+8 %: rises in ~40 s (no stuck margin) */
++#define TOUCH_STUCK_MS    30000 /* above +8 % this long: recalibrate */
 +#define TOUCH_DEBOUNCE    3     /* consecutive samples (x 20 ms) */
 +#define TOUCH_PERIOD_MS   20
 +
@@ -566,9 +633,10 @@ index 0000000..66bff4e
 +    uint32_t baseline = 0, v = 0;
 +    uint32_t base_q8 = 0;   /* baseline * 256, for a slow fixed-point average */
 +    int on = 0, off = 0;
++    uint32_t active_ms = 0;
 +    for (;;) {
 +        vTaskDelay(pdMS_TO_TICKS(TOUCH_PERIOD_MS));
-+        if (touch_channel_read_data(chan, TOUCH_CHAN_DATA_TYPE_SMOOTH, &v) != ESP_OK || v == 0 || v > 0xFFFFFF) {
++        if (touch_channel_read_data(chan, TOUCH_CHAN_DATA_TYPE_SMOOTH, &v) != ESP_OK || v == 0 || v > 0x7FFFFF) {  /* v << 8 must fit int32 */
 +            continue;
 +        }
 +        if (baseline == 0 || v < baseline) {
@@ -579,8 +647,22 @@ index 0000000..66bff4e
 +             * below base_q8 because of its fractional part. */
 +            base_q8 = (uint32_t)((int32_t)base_q8 + ((int32_t)(v << 8) - (int32_t)base_q8) / 512);
 +        }
++        else if (v <= baseline + baseline / 100 * TOUCH_ON_PCT) {
++            /* +4..+8 %: follow slowly (~40 s) so a small lasting rise does not
++             * eat the touch margin; a real touch crosses this band in < 0.1 s. */
++            base_q8 = (uint32_t)((int32_t)base_q8 + ((int32_t)(v << 8) - (int32_t)base_q8) / 2048);
++        }
 +        baseline = base_q8 >> 8;
 +        bool active = v > baseline + baseline / 100 * TOUCH_ON_PCT;
++        if (active && (active_ms += TOUCH_PERIOD_MS) >= TOUCH_STUCK_MS) {
++            base_q8 = v << 8;                  /* stuck: take it as the new idle level */
++            baseline = v;
++            active = false;
++            active_ms = 0;
++        }
++        if (!active) {
++            active_ms = 0;
++        }
 +        if (active) {
 +            off = 0;
 +            if (on < TOUCH_DEBOUNCE && ++on == TOUCH_DEBOUNCE) {
