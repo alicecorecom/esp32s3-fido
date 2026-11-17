@@ -93,7 +93,7 @@ index 96cf21a..e6c9255 100644
      return 0;
  #endif
 diff --git a/src/fs/low_flash.c b/src/fs/low_flash.c
-index 5ac7185..0a96765 100644
+index 5ac7185..4e5c794 100644
 --- a/src/fs/low_flash.c
 +++ b/src/fs/low_flash.c
 @@ -32,10 +32,19 @@
@@ -118,17 +118,16 @@ index 5ac7185..0a96765 100644
    #define restore_interrupts(a) (void)a
   #else
    #ifdef _MSC_VER
-@@ -66,6 +75,26 @@
+@@ -66,6 +75,25 @@
   uint8_t *map = NULL;
   #include <fcntl.h>
  #endif
 +
 +#ifdef ESP_PLATFORM
++#include "led/led.h"
 +static void part0_mirror_fatal(const char *what, esp_err_t err) {
 +    printf("FATAL: part0 mirror: %s [%d]. Halting.\n", what, (int)err);
-+    for (;;) {
-+        vTaskDelay(portMAX_DELAY);
-+    }
++    led_fatal_halt();       /* red fast blink, never returns */
 +}
 +
 +/* Re-read [off, off+len) of part0 from flash into the RAM mirror. */
@@ -145,7 +144,7 @@ index 5ac7185..0a96765 100644
  #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
  extern uint32_t FLASH_SIZE_BYTES;
  #else
-@@ -351,11 +380,9 @@ void low_flash_task(void) {
+@@ -351,11 +379,9 @@ void low_flash_task(void) {
              flash_available = false;
          }
  #ifdef ESP_PLATFORM
@@ -160,7 +159,7 @@ index 5ac7185..0a96765 100644
  #endif
  #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
          out:
-@@ -556,7 +583,14 @@ void low_flash_init(void) {
+@@ -556,7 +582,14 @@ void low_flash_init(void) {
      uint32_t data_end_addr;
  #if defined(ESP_PLATFORM)
      part0 = esp_partition_find_first(0x40, 0x1, "part0");
@@ -176,11 +175,124 @@ index 5ac7185..0a96765 100644
      data_start_addr = 0;
      data_end_addr = part0->size;
      FLASH_SIZE_BYTES = part0->size;
+diff --git a/src/led/led.c b/src/led/led.c
+index 145cafb..eff26bc 100644
+--- a/src/led/led.c
++++ b/src/led/led.c
+@@ -53,8 +53,48 @@ void led_blink_n_times(uint8_t count, uint8_t color, uint32_t on_ms, uint32_t of
+     blink_pending = true;
+ }
+ 
++#ifdef ESP_PLATFORM
++#include "tusb.h"
++/* esp32s3-fido: drive the idle/error LED from the USB state.
++ * - first 3 s after boot without USB: dark (no red flash on every plug-in)
++ * - USB comes up: one 0.5 s blue flash, then the (dark) mounted mode
++ * - still no USB after 3 s (charge-only cable etc.): red blink */
++#define ESP32S3_FIDO_USB_GRACE_MS 3000
++static void esp32s3_fido_usb_led(uint32_t now) {
++    static bool was_mounted = false;
++    if (led_mode == MODE_FATAL) {
++        return;
++    }
++    bool mounted = tud_mounted();
++    if (mounted && !was_mounted) {
++        if (led_mode == MODE_NOT_MOUNTED) {
++            led_mode = MODE_MOUNTED;
++        }
++        led_blink_n_times(1, LED_COLOR_BLUE, 500, 1);
++    }
++    else if (!mounted) {
++        led_mode = now < ESP32S3_FIDO_USB_GRACE_MS && !was_mounted ? MODE_MOUNTED : MODE_NOT_MOUNTED;
++    }
++    was_mounted = mounted;
++}
++
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++void led_fatal_halt(void) {
++    led_init();             /* may run before the normal led_init() */
++    led_set_mode(MODE_FATAL);
++    for (;;) {
++        led_blinking_task();
++        vTaskDelay(pdMS_TO_TICKS(10));
++    }
++}
++#endif
++
+ void led_blinking_task(void) {
+ #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
++#ifdef ESP_PLATFORM
++    esp32s3_fido_usb_led(board_millis());
++#endif
+     static uint32_t start_ms = 0;
+     static uint32_t stop_ms = 0;
+     static uint32_t last_led_update_ms = 0;
+diff --git a/src/led/led.h b/src/led/led.h
+index 220ebd5..aae183f 100644
+--- a/src/led/led.h
++++ b/src/led/led.h
+@@ -51,16 +51,32 @@ enum {
+ #define LED_ON_NO_BLINK     ((1000 << LED_ON_SHIFT) | (0 << LED_OFF_SHIFT))
+ 
+ enum  {
++#ifdef ESP_PLATFORM
++    /* esp32s3-fido: quiet LED. Dark while idle (a single blue flash when USB
++     * comes up is done in led.c), white fast blink while waiting for the
++     * touch pad / BOOT, red blink for errors. Values must stay distinct. */
++    MODE_NOT_MOUNTED = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
++    MODE_MOUNTED     = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_OFF << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
++    MODE_SUSPENDED   = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_OFF << LED_COLOR_SHIFT) | (1000 << LED_ON_SHIFT) | (2000 << LED_OFF_SHIFT),
++    MODE_PROCESSING  = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | (50 << LED_ON_SHIFT) | (50 << LED_OFF_SHIFT),
++    MODE_BUTTON      = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_WHITE << LED_COLOR_SHIFT) | (150 << LED_ON_SHIFT) | (150 << LED_OFF_SHIFT),
++    MODE_FATAL       = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (150 << LED_ON_SHIFT) | (150 << LED_OFF_SHIFT),
++#else
+     MODE_NOT_MOUNTED = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
+     MODE_MOUNTED     = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
+     MODE_SUSPENDED   = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_BLUE << LED_COLOR_SHIFT) | (1000 << LED_ON_SHIFT) | (2000 << LED_OFF_SHIFT),
+     MODE_PROCESSING  = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | (50 << LED_ON_SHIFT) | (50 << LED_OFF_SHIFT),
+     MODE_BUTTON      = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_YELLOW << LED_COLOR_SHIFT) | (1000 << LED_ON_SHIFT) | (100 << LED_OFF_SHIFT),
++#endif
+ 
+     MODE_ALWAYS_ON   = UINT32_MAX,
+     MODE_ALWAYS_OFF  = 0
+ };
+ 
++#ifdef ESP_PLATFORM
++/* esp32s3-fido: blink red fast forever (startup failures). Never returns. */
++extern void led_fatal_halt(void);
++#endif
+ extern void led_set_mode(uint32_t mode);
+ extern uint32_t led_get_mode(void);
+ extern void led_blink_n_times(uint8_t count, uint8_t color, uint32_t on_ms, uint32_t off_ms);
+diff --git a/src/led/led_neopixel.c b/src/led/led_neopixel.c
+index f93a2f8..c8c79ea 100644
+--- a/src/led/led_neopixel.c
++++ b/src/led/led_neopixel.c
+@@ -39,8 +39,17 @@ tNeopixel pixel[] = {
+     { 0, NP_RGB(255, 255,  255) }, /* white */
+ };
+ 
++/* esp32s3-fido: the neopixel driver sends the standard WS2812 order (G, R, B).
++ * SuperMini boards #1-#3 (headerless lot, MAC 40/41:xx) carry an LED that
++ * expects R first, so without commissioning red and green are swapped.
++ * PHY_LED_ORDER_GRB swaps r/g before sending, which fixes those boards.
++ * Use -DESP32S3_FIDO_LED_ORDER=PHY_LED_ORDER_RGB for a standard WS2812. */
++#ifndef ESP32S3_FIDO_LED_ORDER
++#define ESP32S3_FIDO_LED_ORDER PHY_LED_ORDER_GRB
++#endif
++
+ static inline uint32_t neopixel_rgb_ordered(uint8_t r, uint8_t g, uint8_t b) {
+-    switch (phy_data.led_order) {
++    switch (phy_data.led_order_present ? phy_data.led_order : ESP32S3_FIDO_LED_ORDER) {
+         case PHY_LED_ORDER_RBG:
+             return NP_RGB(r, b, g);
+         case PHY_LED_ORDER_GRB:
 diff --git a/src/otp/otp_esp32.c b/src/otp/otp_esp32.c
-index e75ade7..3369125 100644
+index e75ade7..46f4327 100644
 --- a/src/otp/otp_esp32.c
 +++ b/src/otp/otp_esp32.c
-@@ -27,8 +27,18 @@
+@@ -27,8 +27,19 @@
  #include "esp_efuse_table.h"
  #include "byte_array.h"
  
@@ -192,6 +304,7 @@ index e75ade7..3369125 100644
 +#include "freertos/task.h"
 +#include "sdkconfig.h"
 +#include "esp_flash_encrypt.h"
++#include "led/led.h"
 +
 +/* esp32s3-fido: the OTP keys are no longer stored in eFuse as readable USER blocks.
 + * One eFuse block holds an HMAC_UP key (read-protected by hardware); otp_key_1/2
@@ -201,7 +314,7 @@ index e75ade7..3369125 100644
  
  uint8_t _otp_key_1[32] = {0};
  uint8_t _otp_key_2[32] = {0};
-@@ -283,60 +293,64 @@ int otp_platform_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
+@@ -283,60 +294,62 @@ int otp_platform_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
      return PICOKEYS_OK;
  }
  
@@ -215,25 +328,39 @@ index e75ade7..3369125 100644
 -        ret = esp_efuse_write_key(OTP_KEY_1, ESP_EFUSE_KEY_PURPOSE_USER, mkek, sizeof(mkek));
 -        if (ret != 0) {
 -            printf("Error writing OTP key 1 [%d]\n", ret);
--        }
--        mbedtls_platform_zeroize(mkek, sizeof(mkek));
--        write_otp[0] = OTP_KEY_1;
--    }
--    ret = read_key_from_efuse(OTP_KEY_1, BYTE_ARRAY(_otp_key_1, sizeof(_otp_key_1)));
--    if (ret != ESP_OK) {
--        printf("Error reading OTP key 1 [%d]\n", ret);
 +/* Never run with weak/unknown keys: stop here instead of falling back to the
 + * "NO-OTP" derivation in derive_kbase(). The firmware stops (BOOT+RST still enters download mode). */
 +static void otp_fatal(const char *what, esp_err_t err) {
 +    printf("FATAL: OTP HMAC key %s [%d]. Halting.\n", what, (int)err);
 +    mbedtls_platform_zeroize(_otp_key_1, sizeof(_otp_key_1));
 +    mbedtls_platform_zeroize(_otp_key_2, sizeof(_otp_key_2));
-+    for (;;) {
-+        vTaskDelay(portMAX_DELAY);
++    led_fatal_halt();       /* red fast blink, never returns */
++}
++
++static void otp_hmac_provision(void) {
++    if (esp_efuse_key_block_unused(OTP_HMAC_BLOCK)) {
++        uint8_t k[32] = {0};
++        random_fill_buffer(BYTE_ARRAY(k, sizeof(k)));
++        /* For HMAC purposes esp_efuse_write_key() also sets read-disable,
++         * write-disable and purpose write-disable in the same batch. */
++        esp_err_t err = esp_efuse_write_key(OTP_HMAC_BLOCK, ESP_EFUSE_KEY_PURPOSE_HMAC_UP, k, sizeof(k));
++        mbedtls_platform_zeroize(k, sizeof(k));
++        if (err != ESP_OK) {
++            otp_fatal("write failed", err);
+         }
+-        mbedtls_platform_zeroize(mkek, sizeof(mkek));
+-        write_otp[0] = OTP_KEY_1;
++        printf("OTP HMAC key provisioned in eFuse KEY%d\n", (int)(OTP_HMAC_BLOCK - EFUSE_BLK_KEY0));
+     }
+-    ret = read_key_from_efuse(OTP_KEY_1, BYTE_ARRAY(_otp_key_1, sizeof(_otp_key_1)));
+-    if (ret != ESP_OK) {
+-        printf("Error reading OTP key 1 [%d]\n", ret);
++    if (esp_efuse_get_key_purpose(OTP_HMAC_BLOCK) != ESP_EFUSE_KEY_PURPOSE_HMAC_UP) {
++        /* e.g. a board that already ran stock pico-fido (USER purpose, readable). */
++        otp_fatal("block has wrong purpose", ESP_ERR_INVALID_STATE);
      }
 -    *otp_key_1_out = _otp_key_1;
-+}
- 
+-
 -    if (esp_efuse_key_block_unused(OTP_KEY_2)) {
 -        mbedtls_ecdsa_context ecdsa;
 -        size_t olen = 0;
@@ -248,32 +375,23 @@ index e75ade7..3369125 100644
 -        ret = esp_efuse_write_key(OTP_KEY_2, ESP_EFUSE_KEY_PURPOSE_USER, pkey, olen);
 -        if (ret != 0) {
 -            printf("Error writing OTP key 2 [%d]\n", ret);
-+static void otp_hmac_provision(void) {
-+    if (esp_efuse_key_block_unused(OTP_HMAC_BLOCK)) {
-+        uint8_t k[32] = {0};
-+        random_fill_buffer(BYTE_ARRAY(k, sizeof(k)));
-+        /* For HMAC purposes esp_efuse_write_key() also sets read-disable,
-+         * write-disable and purpose write-disable in the same batch. */
-+        esp_err_t err = esp_efuse_write_key(OTP_HMAC_BLOCK, ESP_EFUSE_KEY_PURPOSE_HMAC_UP, k, sizeof(k));
-+        mbedtls_platform_zeroize(k, sizeof(k));
-+        if (err != ESP_OK) {
-+            otp_fatal("write failed", err);
-         }
+-        }
 -        mbedtls_platform_zeroize(pkey, sizeof(pkey));
 -        write_otp[1] = OTP_KEY_2;
-+        printf("OTP HMAC key provisioned in eFuse KEY%d\n", (int)(OTP_HMAC_BLOCK - EFUSE_BLK_KEY0));
++    if (!esp_efuse_get_key_dis_read(OTP_HMAC_BLOCK)) {
++        otp_fatal("block is not read-protected", ESP_ERR_INVALID_STATE);
      }
 -    ret = read_key_from_efuse(OTP_KEY_2, BYTE_ARRAY(_otp_key_2, sizeof(_otp_key_2)));
 -    if (ret != ESP_OK) {
 -        printf("Error reading OTP key 2 [%d]\n", ret);
-+    if (esp_efuse_get_key_purpose(OTP_HMAC_BLOCK) != ESP_EFUSE_KEY_PURPOSE_HMAC_UP) {
-+        /* e.g. a board that already ran stock pico-fido (USER purpose, readable). */
-+        otp_fatal("block has wrong purpose", ESP_ERR_INVALID_STATE);
++}
++
++static void otp_hmac_derive(const char *label, uint8_t out[32]) {
++    esp_err_t err = esp_hmac_calculate(OTP_HMAC_KEY_ID, label, strlen(label), out);
++    if (err != ESP_OK) {
++        otp_fatal("HMAC failed", err);
      }
 -    *otp_key_2_out = _otp_key_2;
-+    if (!esp_efuse_get_key_dis_read(OTP_HMAC_BLOCK)) {
-+        otp_fatal("block is not read-protected", ESP_ERR_INVALID_STATE);
-+    }
 +}
  
 -    for (size_t i = 0; i < sizeof(write_otp) / sizeof(write_otp[0]); i++) {
@@ -287,13 +405,6 @@ index e75ade7..3369125 100644
 -                printf("Error setting OTP key %d purpose to read only [%d]\n", i, ret);
 -            }
 -        }
-+static void otp_hmac_derive(const char *label, uint8_t out[32]) {
-+    esp_err_t err = esp_hmac_calculate(OTP_HMAC_KEY_ID, label, strlen(label), out);
-+    if (err != ESP_OK) {
-+        otp_fatal("HMAC failed", err);
-+    }
-+}
-+
 +void otp_platform_init(const uint8_t **otp_key_1_out, const uint8_t **otp_key_2_out) {
 +    (void)read_key_from_efuse;
 +#ifdef CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE
