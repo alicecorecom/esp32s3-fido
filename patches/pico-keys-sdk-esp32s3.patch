@@ -542,3 +542,22 @@ index 0000000..9c47e44
 +void touch_button_info(touch_button_info_t *out);
 +
 +#endif
+diff --git a/src/usb/usb_descriptors.c b/src/usb/usb_descriptors.c
+index b6b8c61..abf5268 100644
+--- a/src/usb/usb_descriptors.c
++++ b/src/usb/usb_descriptors.c
+@@ -328,7 +328,14 @@ uint8_t const desc_bos[] = {
+     // total length, number of device caps
+     TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 2),
+     // Vendor Code, iLandingPage
++#ifdef ESP_PLATFORM
++    // esp32s3-fido: no landing page, so Chrome does not pop up
++    // "Pico Key detected - go to www.picokeys.com" on every plug-in.
++    // The WebUSB interface itself stays.
++    TUD_BOS_WEBUSB_DESCRIPTOR(VENDOR_REQUEST_WEBUSB, 0),
++#else
+     TUD_BOS_WEBUSB_DESCRIPTOR(VENDOR_REQUEST_WEBUSB, 1),
++#endif
+     // Microsoft OS 2.0 descriptor
+     TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT)
+ };

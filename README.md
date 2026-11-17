@@ -74,12 +74,19 @@ DRBG を初期化して使う）に従う:
 - DRBG の初期化に失敗したら、エントロピー源を止めずに本家と同じ動作に戻る（タッチは効かない）
 - このため `config/mbedtls_config.h` で `MBEDTLS_CTR_DRBG_C` を ESP でも有効にし、`ctr_drbg.c` をビルドに加えた
 
+### 6. 挿すたびの通知を止める（`src/usb/usb_descriptors.c`）
+
+本家は WebUSB の BOS 記述子でランディングページ（`https://www.picokeys.com`）を告知している。
+Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を出す。改造版では `iLandingPage` を 0 にした
+（WebUSB のインターフェース自体は残る）。
+
 | | 本家 | 改造版 |
 |---|---|---|
 | eFuse の鍵 | ソフトから読める | 読めない（HMAC 専用） |
 | フラッシュ + eFuse を吸い出されたら | 親鍵を復元される | 復元できない（release 時） |
 | フラッシュ暗号化 | データが読めなくなる | 動く |
 | 本人確認ボタン | 既定で無効 | BOOT かタッチパッドを待つ |
+| 挿したときの Chrome の通知 | 「Pico Key detected（picokeys.com へ）」が毎回出る | 出ない |
 | 乱数 | SAR ADC エントロピーを常時有効 | 起動時に CTR-DRBG を初期化してから止める |
 | 作者のセキュアブート | 有効化すると作者署名のファームしか起動しない | 使わない |
 
