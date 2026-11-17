@@ -1,6 +1,18 @@
 # Settings shared by every profile (layered on top of pico-keys-sdk's sdkconfig.defaults).
+# The partition layout must be identical in dev / devenc / release so a board can
+# move dev -> devenc -> release without re-laying out flash.
 CONFIG_IDF_TARGET="esp32s3"
 
 # This board has no 技適 (Japanese radio certification): the radio must never be used.
-CONFIG_BT_ENABLED=n
-CONFIG_ESP_WIFI_ENABLED=n
+# pico-fido does not pull in the bt / esp_wifi components at all (their Kconfig
+# symbols do not even exist in this build). check_no_radio.ps1 verifies the ELF.
+
+# ESP32-S3FH4R2: 2MB quad PSRAM. Holds the RAM mirror of part0 (see the
+# low_flash.c patch); only allocated explicitly with heap_caps_malloc().
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+
+# The flash-encryption bootloader is 0x80C0 bytes and would overrun the default
+# table at 0x8000. pico-keys-sdk's partitions.csv starts at 0x11000.
+CONFIG_PARTITION_TABLE_OFFSET=0x10000

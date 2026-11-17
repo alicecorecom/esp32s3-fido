@@ -9,8 +9,8 @@
 # No param() block on purpose: PowerShell would treat idf.py's "-p" as an
 # abbreviation of a script parameter.
 $ErrorActionPreference = 'Stop'
-if ($args.Count -lt 1 -or $args[0] -notin @('dev', 'release')) {
-    throw 'usage: .\idf.ps1 <dev|release> <idf.py arguments...>'
+if ($args.Count -lt 1 -or $args[0] -notin @('dev', 'devenc', 'release')) {
+    throw 'usage: .\idf.ps1 <dev|devenc|release> <idf.py arguments...>'
 }
 $Profile = $args[0]
 $IdfArgs = @($args | Select-Object -Skip 1)

@@ -1,18 +1,14 @@
-# Production profile: flash encryption in RELEASE mode.
-# IRREVERSIBLE: after the first boot the board can only run this firmware.
+# Production profile: flash encryption in RELEASE mode. IRREVERSIBLE.
+# Only flash this onto a board that already passed the devenc profile, using
+# `.\idf.ps1 release -p COMx encrypted-flash`. On first boot the app calls
+# esp_flash_encryption_set_release_mode() (otp_esp32.c patch), which turns the
+# DEVELOPMENT eFuses into RELEASE and enables secure download mode.
 
 CONFIG_SECURE_FLASH_ENC_ENABLED=y
 CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
-# XTS-AES-128, one eFuse key block. The key is generated on the chip by the
-# bootloader on first boot and is never known to anyone (read-protected).
 CONFIG_SECURE_FLASH_ENCRYPTION_AES128=y
-# The app refuses to run if flash encryption is somehow not enabled.
 CONFIG_SECURE_FLASH_CHECK_ENC_EN_IN_APP=y
 
 # ROM download mode: "secure" = no flash/RAM reads, no plaintext writes that
 # would boot; espefuse summary also stops working, get-security-info still works.
 CONFIG_SECURE_ENABLE_SECURE_ROM_DL_MODE=y
-
-# The larger bootloader must not run into the partition table (default 0x8000).
-# pico-keys-sdk's partitions.csv starts at 0x11000, so 0x10000 is free.
-CONFIG_PARTITION_TABLE_OFFSET=0x10000

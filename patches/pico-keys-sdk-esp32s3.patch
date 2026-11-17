@@ -1,0 +1,243 @@
+diff --git a/src/button.c b/src/button.c
+index 96cf21a..1d8b63d 100644
+--- a/src/button.c
++++ b/src/button.c
+@@ -191,7 +191,15 @@ uint32_t button_timeout_seconds(void) {
+        it will not be possible to indicate button press unless it
+        is commissioned. */
+ #ifndef ENABLE_EMULATION
++    /* esp32s3-fido: require the BOOT button (user presence) unless the board
++     * was explicitly commissioned otherwise. Upstream defaults to 0 = disabled,
++     * which lets any software on the host use the key silently. The browser /
++     * Windows prompt tells the user to touch the key, so no LED is needed. */
++#ifdef ESP_PLATFORM
++    return phy_data.up_btn_present ? phy_data.up_btn : 15;
++#else
+     return phy_data.up_btn_present ? phy_data.up_btn : 0;
++#endif
+ #else
+     return 0;
+ #endif
+diff --git a/src/fs/low_flash.c b/src/fs/low_flash.c
+index 5ac7185..0a96765 100644
+--- a/src/fs/low_flash.c
++++ b/src/fs/low_flash.c
+@@ -32,10 +32,19 @@
+  #ifdef ESP_PLATFORM
+   #include "compat/esp_compat.h"
+   #include "esp_partition.h"
++  #include "esp_heap_caps.h"
++  #include "freertos/FreeRTOS.h"
++  #include "freertos/task.h"
+   const esp_partition_t *part0;
++  /* esp32s3-fido: part0 is NOT read through esp_partition_mmap(). With flash
++   * encryption enabled, every cache (mmap) read is decrypted, including data
++   * stored unencrypted, so mmap returns garbage. Instead `map` is a RAM mirror
++   * (PSRAM) of part0, filled with esp_partition_read() (never decrypts an
++   * unencrypted partition) and refreshed from flash after every erase/program. */
++  static void part0_mirror_refresh(uint32_t off, uint32_t len);
+   #define save_and_disable_interrupts() 1
+-  #define flash_range_erase(a,b) esp_partition_erase_range(part0, a, b)
+-  #define flash_range_program(a,b,c) esp_partition_write(part0, a, b, c);
++  #define flash_range_erase(a,b) do { esp_partition_erase_range(part0, a, b); part0_mirror_refresh(a, b); } while (0)
++  #define flash_range_program(a,b,c) do { esp_partition_write(part0, a, b, c); part0_mirror_refresh(a, c); } while (0)
+   #define restore_interrupts(a) (void)a
+  #else
+   #ifdef _MSC_VER
+@@ -66,6 +75,26 @@
+  uint8_t *map = NULL;
+  #include <fcntl.h>
+ #endif
++
++#ifdef ESP_PLATFORM
++static void part0_mirror_fatal(const char *what, esp_err_t err) {
++    printf("FATAL: part0 mirror: %s [%d]. Halting.\n", what, (int)err);
++    for (;;) {
++        vTaskDelay(portMAX_DELAY);
++    }
++}
++
++/* Re-read [off, off+len) of part0 from flash into the RAM mirror. */
++static void part0_mirror_refresh(uint32_t off, uint32_t len) {
++    if (map == NULL) {
++        return;
++    }
++    esp_err_t err = esp_partition_read_raw(part0, off, map + off, len);
++    if (err != ESP_OK) {
++        part0_mirror_fatal("read failed", err);
++    }
++}
++#endif
+ #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
+ extern uint32_t FLASH_SIZE_BYTES;
+ #else
+@@ -351,11 +380,9 @@ void low_flash_task(void) {
+             flash_available = false;
+         }
+ #ifdef ESP_PLATFORM
+-        if (flash_updated && multicore_lockout_start_timeout_us(1000)) {
+-            esp_partition_munmap(fd_map);
+-            esp_partition_mmap(part0, 0, part0->size, ESP_PARTITION_MMAP_DATA, (const void **)&map, (esp_partition_mmap_handle_t *)&fd_map);
+-            multicore_lockout_end_timeout_us(1000);
+-        }
++        /* The RAM mirror is refreshed inside flash_range_erase/program, at the
++         * same address, so there is nothing to remap here. */
++        (void)flash_updated;
+ #endif
+ #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
+         out:
+@@ -556,7 +583,14 @@ void low_flash_init(void) {
+     uint32_t data_end_addr;
+ #if defined(ESP_PLATFORM)
+     part0 = esp_partition_find_first(0x40, 0x1, "part0");
+-    esp_partition_mmap(part0, 0, part0->size, ESP_PARTITION_MMAP_DATA, (const void **)&map, (esp_partition_mmap_handle_t *)&fd_map);
++    if (part0 == NULL) {
++        part0_mirror_fatal("partition not found", ESP_ERR_NOT_FOUND);
++    }
++    map = heap_caps_malloc(part0->size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++    if (map == NULL) {
++        part0_mirror_fatal("no PSRAM for mirror", ESP_ERR_NO_MEM);
++    }
++    part0_mirror_refresh(0, part0->size);
+     data_start_addr = 0;
+     data_end_addr = part0->size;
+     FLASH_SIZE_BYTES = part0->size;
+diff --git a/src/otp/otp_esp32.c b/src/otp/otp_esp32.c
+index e75ade7..3369125 100644
+--- a/src/otp/otp_esp32.c
++++ b/src/otp/otp_esp32.c
+@@ -27,8 +27,18 @@
+ #include "esp_efuse_table.h"
+ #include "byte_array.h"
+ 
+-#define OTP_KEY_1    EFUSE_BLK_KEY3
+-#define OTP_KEY_2    EFUSE_BLK_KEY4
++#include "esp_hmac.h"
++#include <string.h>
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++#include "sdkconfig.h"
++#include "esp_flash_encrypt.h"
++
++/* esp32s3-fido: the OTP keys are no longer stored in eFuse as readable USER blocks.
++ * One eFuse block holds an HMAC_UP key (read-protected by hardware); otp_key_1/2
++ * are HMAC(that key, label), computed by the HMAC peripheral at every boot. */
++#define OTP_HMAC_BLOCK   EFUSE_BLK_KEY3
++#define OTP_HMAC_KEY_ID  HMAC_KEY3
+ 
+ uint8_t _otp_key_1[32] = {0};
+ uint8_t _otp_key_2[32] = {0};
+@@ -283,60 +293,64 @@ int otp_platform_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
+     return PICOKEYS_OK;
+ }
+ 
+-void otp_platform_init(const uint8_t **otp_key_1_out, const uint8_t **otp_key_2_out) {
+-    esp_err_t ret = 0;
+-    uint16_t write_otp[2] = {0xFFFF, 0xFFFF};
+-
+-    if (esp_efuse_key_block_unused(OTP_KEY_1)) {
+-        uint8_t mkek[32] = {0};
+-        random_fill_buffer(BYTE_ARRAY(mkek, sizeof(mkek)));
+-        ret = esp_efuse_write_key(OTP_KEY_1, ESP_EFUSE_KEY_PURPOSE_USER, mkek, sizeof(mkek));
+-        if (ret != 0) {
+-            printf("Error writing OTP key 1 [%d]\n", ret);
+-        }
+-        mbedtls_platform_zeroize(mkek, sizeof(mkek));
+-        write_otp[0] = OTP_KEY_1;
+-    }
+-    ret = read_key_from_efuse(OTP_KEY_1, BYTE_ARRAY(_otp_key_1, sizeof(_otp_key_1)));
+-    if (ret != ESP_OK) {
+-        printf("Error reading OTP key 1 [%d]\n", ret);
++/* Never run with weak/unknown keys: stop here instead of falling back to the
++ * "NO-OTP" derivation in derive_kbase(). The firmware stops (BOOT+RST still enters download mode). */
++static void otp_fatal(const char *what, esp_err_t err) {
++    printf("FATAL: OTP HMAC key %s [%d]. Halting.\n", what, (int)err);
++    mbedtls_platform_zeroize(_otp_key_1, sizeof(_otp_key_1));
++    mbedtls_platform_zeroize(_otp_key_2, sizeof(_otp_key_2));
++    for (;;) {
++        vTaskDelay(portMAX_DELAY);
+     }
+-    *otp_key_1_out = _otp_key_1;
++}
+ 
+-    if (esp_efuse_key_block_unused(OTP_KEY_2)) {
+-        mbedtls_ecdsa_context ecdsa;
+-        size_t olen = 0;
+-        uint8_t pkey[MBEDTLS_ECP_MAX_BYTES];
+-        while (olen != 32) {
+-            mbedtls_ecdsa_init(&ecdsa);
+-            mbedtls_ecp_group_id ec_id = MBEDTLS_ECP_DP_SECP256K1;
+-            mbedtls_ecdsa_genkey(&ecdsa, ec_id, random_fill_iterator, NULL);
+-            mbedtls_ecp_write_key_ext(&ecdsa, &olen, pkey, sizeof(pkey));
+-            mbedtls_ecdsa_free(&ecdsa);
+-        }
+-        ret = esp_efuse_write_key(OTP_KEY_2, ESP_EFUSE_KEY_PURPOSE_USER, pkey, olen);
+-        if (ret != 0) {
+-            printf("Error writing OTP key 2 [%d]\n", ret);
++static void otp_hmac_provision(void) {
++    if (esp_efuse_key_block_unused(OTP_HMAC_BLOCK)) {
++        uint8_t k[32] = {0};
++        random_fill_buffer(BYTE_ARRAY(k, sizeof(k)));
++        /* For HMAC purposes esp_efuse_write_key() also sets read-disable,
++         * write-disable and purpose write-disable in the same batch. */
++        esp_err_t err = esp_efuse_write_key(OTP_HMAC_BLOCK, ESP_EFUSE_KEY_PURPOSE_HMAC_UP, k, sizeof(k));
++        mbedtls_platform_zeroize(k, sizeof(k));
++        if (err != ESP_OK) {
++            otp_fatal("write failed", err);
+         }
+-        mbedtls_platform_zeroize(pkey, sizeof(pkey));
+-        write_otp[1] = OTP_KEY_2;
++        printf("OTP HMAC key provisioned in eFuse KEY%d\n", (int)(OTP_HMAC_BLOCK - EFUSE_BLK_KEY0));
+     }
+-    ret = read_key_from_efuse(OTP_KEY_2, BYTE_ARRAY(_otp_key_2, sizeof(_otp_key_2)));
+-    if (ret != ESP_OK) {
+-        printf("Error reading OTP key 2 [%d]\n", ret);
++    if (esp_efuse_get_key_purpose(OTP_HMAC_BLOCK) != ESP_EFUSE_KEY_PURPOSE_HMAC_UP) {
++        /* e.g. a board that already ran stock pico-fido (USER purpose, readable). */
++        otp_fatal("block has wrong purpose", ESP_ERR_INVALID_STATE);
+     }
+-    *otp_key_2_out = _otp_key_2;
++    if (!esp_efuse_get_key_dis_read(OTP_HMAC_BLOCK)) {
++        otp_fatal("block is not read-protected", ESP_ERR_INVALID_STATE);
++    }
++}
+ 
+-    for (size_t i = 0; i < sizeof(write_otp) / sizeof(write_otp[0]); i++) {
+-        if (write_otp[i] != 0xFFFF) {
+-            ret = esp_efuse_set_key_dis_write(write_otp[i]);
+-            if (ret != ESP_OK) {
+-                printf("Error setting OTP key %d to read only [%d]\n", i, ret);
+-            }
+-            ret = esp_efuse_set_keypurpose_dis_write(write_otp[i]);
+-            if (ret != ESP_OK) {
+-                printf("Error setting OTP key %d purpose to read only [%d]\n", i, ret);
+-            }
+-        }
++static void otp_hmac_derive(const char *label, uint8_t out[32]) {
++    esp_err_t err = esp_hmac_calculate(OTP_HMAC_KEY_ID, label, strlen(label), out);
++    if (err != ESP_OK) {
++        otp_fatal("HMAC failed", err);
++    }
++}
++
++void otp_platform_init(const uint8_t **otp_key_1_out, const uint8_t **otp_key_2_out) {
++    (void)read_key_from_efuse;
++#ifdef CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE
++    /* A board verified with the devenc profile has flash encryption in
++     * DEVELOPMENT mode. The bootloader does not upgrade an already-encrypted
++     * board, so the release app does it: burns DIS_DOWNLOAD_MANUAL_ENCRYPT,
++     * write-protects CRYPT_CNT, enables secure download mode. Aborts (and
++     * reboots) if the result is not RELEASE. */
++    if (esp_get_flash_encryption_mode() == ESP_FLASH_ENC_MODE_DEVELOPMENT) {
++        printf("Flash encryption: switching DEVELOPMENT -> RELEASE\n");
++        esp_flash_encryption_set_release_mode();
+     }
++#endif
++    otp_hmac_provision();
++    otp_hmac_derive("pico-keys/otp_key_1", _otp_key_1);
++    /* otp_key_2 is used as a secp256k1 private key (rescue.c); an HMAC output is
++     * a valid scalar except with negligible probability (< 2^-127). */
++    otp_hmac_derive("pico-keys/otp_key_2", _otp_key_2);
++    *otp_key_1_out = _otp_key_1;
++    *otp_key_2_out = _otp_key_2;
+ }
