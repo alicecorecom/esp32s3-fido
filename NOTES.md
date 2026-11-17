@@ -55,5 +55,6 @@
   - release ビルドでは CCID を外す（pico-fido の `ENABLE_OTP_APP` / `ENABLE_OATH_APP` を無効にすると CCID ごと外れる）。dev / devenc は残す
     - 理由: CCID の rescue アプレットで、設定の書き換え（本人確認の待ち時間を 0 にするなど）と、デバイス鍵での任意の署名ができる。どちらも本人確認は要るが、FIDO2 だけなら不要な窓口。release 後はファームを直せないので閉じておく
     - 失うもの: `tools/ccid/getinfo.py`、OTP / OATH、PicoKey App からの設定変更（設定は全部ファームの既定値に入れてあるので困らない）
+    - getInfo は HID でも取れる（Windows では管理者権限が要る）。release に進むときに `getinfo.py` を python-fido2 の HID 版にする
     - release の前に devenc で一度試す: FIDO2 のログインが通ること、デバイスマネージャーから CCID（スマート カード読み取り装置・不明なスマートカード）が消えること
 - ケースとタッチ電極（熱収縮チューブ Φ16〜20mm、銅テープ、カプトン、細い線）→ `tools/touchprobe` で測り直す
