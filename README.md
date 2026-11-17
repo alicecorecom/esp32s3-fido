@@ -67,6 +67,19 @@ sdkconfig は `pico-keys-sdk の defaults` → `config/sdkconfig.common` → `co
 
 **初回起動で eFuse KEY3 が焼かれる（元に戻せない）。** dev プロファイルなら基板自体は書き直せる。
 
+## ⚠ 既知の問題：今の release プロファイルは動かない（使わないこと）
+
+pico-keys-sdk は `part0`（鍵などのデータ）を `esp_partition_mmap()` で読んでいる。
+フラッシュ暗号化が有効だと、キャッシュ経由の読み出しは**暗号化されていない領域も無条件に「復号」される**
+（ESP-IDF `docs/en/security/flash-encryption.rst`:
+"Data which is stored unencrypted in flash memory will also be "transparently decrypted" via the flash cache and will appear to software as random garbage."）。
+そのため release 化すると、書いたデータを正しく読み戻せず、Windows では「このセキュリティキーは使用できません」になる。
+
+2026-11-17、SuperMini 2台目（40:F8:54）をこれで失った（release なので書き直し不可、廃棄）。
+
+直すには `part0` の読み出しを mmap から `esp_partition_read()` に変える改造が要る（未対応）。
+**release に進む前に、同じ設定を development モードの暗号化（書き直し可能）で実機検証すること。**
+
 ## 本番化（フラッシュ暗号化 release）— 元に戻せない
 
 `config/sdkconfig.release`:
@@ -81,6 +94,7 @@ sdkconfig は `pico-keys-sdk の defaults` → `config/sdkconfig.common` → `co
 - `part0`（鍵などのデータ）は暗号化しない
   - pico-keys のジャーナルが、消去なしの上書きと 0xFF 判定を前提にしているため
   - 中の親鍵は HMAC 由来の鍵で暗号化されているので、平文のままで構わない
+  - **ただし読み出しが mmap のままだと壊れる（上の「既知の問題」）**
 
 手順（BOOT+RST でダウンロードモードにした状態から）:
 
@@ -99,7 +113,7 @@ uv run esptool --chip esp32s3 --port COM7 --before no-reset --after no-reset era
 
 | 基板 | 状態 |
 |---|---|
-| SuperMini 2台目（MAC 末尾 40:F8:54、LED RGB） | 2026-11-17 release 化済み。KEY3 = HMAC_UP（読み出し禁止を espefuse で確認）、フラッシュ暗号化有効 |
+| SuperMini 2台目（MAC 末尾 40:F8:54、LED RGB） | **廃棄**。dev 版では PIN 設定・webauthn.io の登録/ログインまで成功し、KEY3 = HMAC_UP（読み出し禁止）も espefuse で確認した。2026-11-17 に release 化したところ、上記の既知の問題で動かなくなった |
 
 FIDO2 の動作確認:
 - Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」で PIN を設定
