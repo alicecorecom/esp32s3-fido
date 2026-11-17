@@ -35,6 +35,7 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 | LED | 常に点滅 | 待機中は消灯、必要なときだけ光る |
 | 乱数 | SAR ADC エントロピーを常時有効（タッチが使えない） | 起動時に CTR-DRBG を初期化 |
 | USB の VID/PID・名前 | Raspberry Pi の番号（2E8A:10FE）、「Pol Henarejos / Pico Key」 | Espressif の VID（303A）、「Alice Core / ESP32-S3 FIDO2 Key」 |
+| AAGUID（機種 ID） | pico-fido 共通（89fb94b7-…） | 独自（fcd33db5-11c4-4f13-9526-9fc4c1447732） |
 | 作者のセキュアブート | 有効化すると作者署名のファームしか起動しない | 使わない |
 
 ## 必要なもの
@@ -221,6 +222,22 @@ Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を�
 - 現在の PID 0x8000 は Espressif のテスト用 PID で、専用の PID が割り当てられるまでの仮の値
 - メーカー名・製品名は `ESP32S3_FIDO_USB_MANUFACTURER` / `ESP32S3_FIDO_USB_PRODUCT` で変えられる
 - 認証器としての動作は VID/PID に依存しない（OS は HID の FIDO 用途ページで見分ける）。変えても登録は消えない
+
+</details>
+
+<details>
+<summary><b>9. 独自の AAGUID</b>（pico-fido の <code>src/fido/cbor.c</code>）</summary>
+
+AAGUID は認証器の機種を表す ID。本家のままだと pico-fido と同じ値を名乗るため、乱数で作った UUIDv4
+`fcd33db5-11c4-4f13-9526-9fc4c1447732` に変えた。
+
+- AAGUID は登録時にだけ送られるので、変えても既存の登録はそのまま使える
+- attestation を求めないサイトや、自己署名の attestation では、ブラウザ / OS が AAGUID をゼロに置き換えてサイトに渡すことがある
+- キーが名乗っている値は `tools/ccid/getinfo.py` で確認できる（CCID 経由。管理者権限は要らない）
+
+```powershell
+uv run --no-project --with pyscard python -I tools\ccid\getinfo.py
+```
 
 </details>
 

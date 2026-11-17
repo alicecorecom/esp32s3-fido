@@ -18,6 +18,24 @@ index d41d04f..fd8c5b2 100644
  
  if(ESP_PLATFORM)
      set(PICOKEYS_COMPONENTS fido)
+diff --git a/src/fido/cbor.c b/src/fido/cbor.c
+index 0a0a48c..1e7d568 100644
+--- a/src/fido/cbor.c
++++ b/src/fido/cbor.c
+@@ -32,7 +32,13 @@ const bool _btrue = true, _bfalse = false;
+ 
+ int cbor_get_assertion(const uint8_t *data, size_t len, bool next);
+ 
++#ifdef ESP_PLATFORM
++/* esp32s3-fido: own AAGUID fcd33db5-11c4-4f13-9526-9fc4c1447732 (random
++ * UUIDv4), so this modified firmware does not claim to be upstream pico-fido. */
++const uint8_t aaguid[16] = { 0xFC, 0xD3, 0x3D, 0xB5, 0x11, 0xC4, 0x4F, 0x13, 0x95, 0x26, 0x9F, 0xC4, 0xC1, 0x44, 0x77, 0x32 };
++#else
+ const uint8_t aaguid[16] = { 0x89, 0xFB, 0x94, 0xB7, 0x06, 0xC9, 0x36, 0x73, 0x9B, 0x7E, 0x30, 0x52, 0x6D, 0x96, 0x81, 0x45 }; // First 16 bytes of SHA256("Pico FIDO2")
++#endif
+ 
+ static const uint8_t *volatile cbor_data = NULL;
+ static volatile size_t cbor_len = 0;
 diff --git a/src/fido/fido.c b/src/fido/fido.c
 index 93120fd..130b163 100644
 --- a/src/fido/fido.c
