@@ -37,7 +37,8 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 | 乱数 | SAR ADC エントロピーを常時有効（タッチが使えない） | 起動時に CTR-DRBG を初期化 |
 | USB の VID/PID・名前 | Raspberry Pi の番号（2E8A:10FE）、「Pol Henarejos / Pico Key」 | Espressif の VID（303A）、「Alice Core / ESP32-S3 FIDO2 Key」 |
 | AAGUID（機種 ID） | pico-fido 共通（89fb94b7-…） | 独自（fcd33db5-11c4-4f13-9526-9fc4c1447732） |
-| 作者のセキュアブート | 有効化すると作者署名のファームしか起動しない | 使わない |
+| セキュアブート | 有効化すると作者署名のファームしか起動しない | 作者の鍵は使わない。自分の鍵で有効にできる（任意、devsb） |
+| パーティション | アプリ領域は1面（factory） | 2面（ota_0 / ota_1）。データ領域 part0 の位置は同じ |
 
 ## 必要なもの
 
@@ -74,6 +75,7 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 
 .\idf.ps1 dev build          # 暗号化なし            -> build\dev
 .\idf.ps1 devenc build       # 開発モードで暗号化    -> build\devenc
+.\idf.ps1 devsb build        # devenc＋セキュアブート -> build\devsb（署名なし。署名は書き込み時）
 .\idf.ps1 release build      # release（本番）       -> build\release
 .\check_no_radio.ps1         # 無線のコードが無いことを確認
 ```
@@ -81,6 +83,7 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 - `idf.ps1` は、`export.ps1` を使わずに環境変数を設定して `idf.py` を呼ぶラッパー。2番目以降の引数は `idf.py` にそのまま渡す
 - sdkconfig は、pico-keys-sdk の defaults → `config/sdkconfig.common` → `config/sdkconfig.<profile>` の順に重ねる
 - パーティションテーブルは全プロファイル共通で 0x10000 に置く（暗号化入りのブートローダは 0x80C0 バイトあり、標準の 0x8000 では収まらない）
+- パーティションは `config/partitions.csv`：アプリ領域 ota_0（0x20000）と ota_1（0x300000）の2面、データ領域 part0 は本家と同じ 0x200000。1面（factory）の版から書き直しても、登録済みのパスキーは残る
 
 ## 書き込み
 
@@ -92,12 +95,34 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 |---|---|---|---|
 | A. dev | `.\idf.ps1 dev -p COMx flash` | 初回起動で eFuse KEY3 を焼く | ファームは書き直せる |
 | B. devenc | 初回：`.\idf.ps1 devenc -p COMx flash`<br>以降：`.\idf.ps1 devenc -p COMx encrypted-flash` | 初回起動でブートローダがフラッシュを暗号化する（開発モード） | 暗号化は解除できないが、`encrypted-flash` で書き直せる |
+| B+. devsb（任意） | `.\idf.ps1 devsb -p COMx encrypted-flash` | B に加えて、初回起動でブートローダがセキュアブートを有効にする（[下記](#セキュアブートdevsb任意)） | **セキュアブートは解除できない。** 登録した鍵で署名すれば書き直せる |
 | C. release | `.\idf.ps1 release -p COMx encrypted-flash` | 起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。ファームも更新できなくなる** |
 
 - 書き込むと USB が FIDO2 デバイスに切り替わり、COM ポートは消える。書き直すときは **BOOT を押しながら RST** を押してダウンロードモードに入れる
 - 書き込んだあとは **基板の RST だけを押して** 起動する。USB 経由のリセットでは、手で入れたダウンロードモードから抜けられない
-- B の間は盗難対策にならない（他人が自分のファームを書き込み、HMAC 回路を使える）。大事なアカウントは C の後に登録する
+- B の間は盗難対策にならない（他人が自分のファームを書き込み、HMAC 回路を使える。フラッシュを吸い出して書き戻せば PIN の失敗回数も戻せる）。大事なアカウントは C の後に登録する
 - C の後は、試験中の登録を消すため Windows の「セキュリティ キーのリセット」をする（親鍵も作り直される）
+- **B+ の基板に今の C は書けない。** release プロファイルはまだセキュアブートに対応しておらず、署名の無いファームは起動しない（起動しないので release への切り替えも起きず、devsb で書き直せば戻る）
+
+### セキュアブート（devsb、任意）
+
+自分の署名鍵（RSA-3072、最大3本）で署名したブートローダとアプリしか起動しないようにする。
+
+- 鍵は 1Password に「ドキュメント」（PEM）として置く。`tools/sbsign.py` が `op document get` でメモリに読んで署名し、ディスクには書かない。署名のたびに 1Password の認証が要る
+- 初回起動で、ブートローダに付けた署名の数だけ eFuse の鍵枠（KEY0〜5 の空き）に公開鍵のダイジェストを焼き、残りの枠は失効させる。予備鍵も最初から付けておくこと（あとから足せない）
+- あわせて JTAG の無効化と `WR_DIS_RD_DIS`（以後、読み取り禁止の鍵を足せない）も焼く。HMAC の鍵（KEY3）を焼き終えた基板（段階 A を通ったもの）で行う
+- フラッシュ暗号化は開発モードのまま、ダウンロードモードも開いたまま。登録した鍵で署名すれば何度でも書き直せる。**鍵を失くすと二度と書き換えられない**
+
+```powershell
+$env:ESP32S3_FIDO_SB_VAULT = '<1Password の保管庫>'
+$env:ESP32S3_FIDO_SB_KEYS  = '<本鍵>;<予備鍵>'    # 1Password のドキュメント名か ID。この順に鍵枠へ焼かれる
+$env:ESP32S3_FIDO_SB_OK    = 'yes'                # セキュアブートがまだ無効の基板に書くときだけ要る（1回ごとに消える）
+.\idf.ps1 devsb -p COMx encrypted-flash
+```
+
+- `idf.ps1` は、開発モードで暗号化済みの基板か確かめ、ビルドし、ブートローダとアプリに全部の鍵で署名して検証してから書き込む
+- セキュアブートを有効にした構成では、ESP-IDF の `flash_args` にブートローダが入らない（`bootloader-flash_args` に分かれる）。`idf.ps1` は両方を合わせて書く
+- 書き込み後に挿しても LED が何も光らなければ、アプリが起動していない。COM ポート（USB シリアル）の起動ログに理由が出る（例：`Sig block 0 signed with untrusted key`）
 
 動作確認：
 - PIN の設定・変更・リセット：Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」
@@ -152,6 +177,7 @@ uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
 | 赤で0.5秒点灯 | 時間切れ・キャンセル |
 | 赤でゆっくり点滅 | 挿して3秒経っても USB が使えない（充電専用ケーブルなど） |
 | 赤で速く点滅 | 起動時の致命的エラー（eFuse の鍵・データ領域）。起動を止めている |
+| 挿しても何も光らない | アプリが起動していない（セキュアブートの署名の拒否、ファームの破損など）。LED はアプリが光らせるので、その手前のブートローダで止まると光らない。COM ポートの起動ログで理由がわかる |
 
 ## 改造の詳細
 
@@ -302,7 +328,7 @@ esptool --chip esp32s3 --port COMx write-flash --encrypt 0x20000 build\touchprob
 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）。
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos、AGPL-3.0-only。`patches/` の改造はその派生物で、同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`tools/sbsign.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスに従う
 
 ファームを書き込んだキーを人に渡す場合は、対応するソース（このリポジトリと、ビルドに使ったコミット）を入手できるようにしてください。

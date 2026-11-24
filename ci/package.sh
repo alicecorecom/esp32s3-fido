@@ -17,7 +17,7 @@ for profile in dev devenc release; do
     mkdir -p "$d/bootloader" "$d/partition_table"
     cp "$b/bootloader/bootloader.bin" "$d/bootloader/"
     cp "$b/partition_table/partition-table.bin" "$d/partition_table/"
-    cp "$b/pico_fido.bin" "$b/flash_args" "$d/"
+    cp "$b/pico_fido.bin" "$b/ota_data_initial.bin" "$b/flash_args" "$d/"
     case $profile in
         devenc) cp "$b/encrypted_flash_args" "$d/" ;;
         # ESP-IDF makes no encrypted_flash_args for a RELEASE-mode build; the

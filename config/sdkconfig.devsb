@@ -1,0 +1,20 @@
+# Verification profile: devenc + Secure Boot V2 (RSA-3072). IRREVERSIBLE.
+# Flash encryption stays in DEVELOPMENT mode and full ROM download mode stays
+# open, so the board can still be re-flashed, but only with images signed by
+# a key whose digest was burned on first boot.
+# The first boot of a devsb bootloader burns one eFuse key slot per signature
+# block on the bootloader (idf.ps1 signs with every key in
+# $env:ESP32S3_FIDO_SB_KEYS), revokes the unused slots, sets SECURE_BOOT_EN,
+# disables JTAG and burns WR_DIS_RD_DIS (no new read-protected keys after
+# that: the HMAC key KEY3 must already exist, i.e. the board passed dev).
+
+CONFIG_SECURE_FLASH_ENC_ENABLED=y
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_DEVELOPMENT=y
+CONFIG_SECURE_FLASH_ENCRYPTION_AES128=y
+CONFIG_SECURE_FLASH_CHECK_ENC_EN_IN_APP=y
+
+CONFIG_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+# Signed by idf.ps1 through tools/sbsign.py (keys stay in 1Password).
+# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set
+CONFIG_SECURE_INSECURE_ALLOW_DL_MODE=y

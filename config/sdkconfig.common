@@ -16,3 +16,8 @@ CONFIG_SPIRAM_USE_CAPS_ALLOC=y
 # The flash-encryption bootloader is 0x80C0 bytes and would overrun the default
 # table at 0x8000. pico-keys-sdk's partitions.csv starts at 0x11000.
 CONFIG_PARTITION_TABLE_OFFSET=0x10000
+
+# Two OTA app slots (config/partitions.csv). The path is relative to the
+# project directory (pico-fido/).
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../config/partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="../config/partitions.csv"
