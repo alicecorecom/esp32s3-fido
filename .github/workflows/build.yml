@@ -124,6 +124,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: ci/release-notes.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
@@ -145,6 +151,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # user-facing notes from ci/release-notes.md; its NOTE block is for the author and goes before publishing
+          sed "s|{TAG}|$TAG|g" ci/release-notes.md > notes.md
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
-            --draft --verify-tag --title "$TAG" \
-            --notes "署名済みの devsb / release と更新用のアプリは tools/sign_release.py で追加する。確かめ方は docs/releases.md を参照。"
+            --draft --verify-tag --title "$TAG" --notes-file notes.md

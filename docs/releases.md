@@ -63,4 +63,5 @@ uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_fla
 
 1. `v*` のタグを push すると、Actions が4つのプロファイルをビルドし、証明を付けて Release の下書きを作る
 2. 手元で `tools/sign_release.py --tag <タグ> --upload` を実行する。下書きの `*-unsigned.zip` の証明を確かめ、1Password の鍵で署名し、`verify_release.py` と同じ確認を通してから、署名済みの zip と app を下書きに足す
-3. 下書きの中身を確かめてから公開する
+3. リリースノート（`ci/release-notes.md` の雛形から作られる）の「新しいもの」を書き、先頭の作者向けの NOTE を消す
+4. 下書きの中身を確かめてから公開する
