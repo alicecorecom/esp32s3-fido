@@ -1,0 +1,20 @@
+[project]
+name = "esp32s3-fido-gui"
+version = "0.1.0"
+description = "esp32s3-fido Manager: passkeys, one-time passwords, OTP slots and firmware updates for an esp32s3-fido key"
+requires-python = ">=3.12"
+license = "AGPL-3.0-only"
+dependencies = [
+    "pyqt6==6.12.1",
+    "yubikey-manager==5.9.2",
+    "fido2==2.2.1",
+    "pyscard==2.3.2",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+build = [
+    "pyinstaller==6.22.3",
+]

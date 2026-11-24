@@ -4,3 +4,6 @@ NOTES.md
 dist/
 dist-signed/
 __pycache__/
+.venv/
+build-gui/
+dist-gui/

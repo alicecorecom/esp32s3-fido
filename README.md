@@ -15,7 +15,7 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 
 - [特長](#特長)
 - [はじめかた](#はじめかた) — 配布版を新品の基板に書き込んで使い始めるまで
-- [使い方](#使い方) — 本人確認、LED、PIN、ファームの更新、ワンタイムパスワード、困ったとき
+- [使い方](#使い方) — 管理ツール（GUI）、本人確認、LED、PIN、ファームの更新、ワンタイムパスワード、困ったとき
 - [配布バイナリの詳細](#配布バイナリの詳細) — ファームの一覧と、本物かどうかの確かめ方、ほかの書き込み方
 - [自分でビルドする](#自分でビルドする) — ESP-IDF でのビルドと、自分の鍵を使ったセキュアブート
 - [改造の詳細](#改造の詳細)
@@ -122,6 +122,30 @@ uv run --no-project --with esptool python -I tools\verify_release.py <保存先>
 以後のファームの更新は、挿したまま USB で行う（[ファームの更新](#ファームの更新)）。
 
 ## 使い方
+
+### 管理ツール（GUI）
+
+キーの状態の確認と、設定できることの全部を、1つのウィンドウで行える（`tools/gui/`、PyQt6）。
+
+- **Windows**：[Releases](https://github.com/alicecorecom/esp32s3-fido/releases/latest) の `esp32s3-fido-manager-<版>.exe` をダウンロードして起動する（インストール不要）。コード署名はしていないので、初回は SmartScreen の「詳細情報 → 実行」が要る。本物かどうかは `gh attestation verify esp32s3-fido-manager-<版>.exe --repo alicecorecom/esp32s3-fido` で確かめられる
+- **macOS / Linux、またはソースから**：リポジトリのフォルダで uv から起動する
+
+```powershell
+uv run --project tools\gui python -I tools\gui\app.py
+```
+
+| タブ | できること |
+|---|---|
+| 状態 | ファームの版・段階・セキュアブート・暗号化、PIN の残り回数、シリアル番号 |
+| パスキー（FIDO2） | PIN の設定・変更、キーに保存されたパスキーの一覧・削除、「常に本人確認」、PIN の最短の長さ、リセット |
+| ワンタイムパスワード | コードの一覧（ダブルクリックでコピー）、追加・名前の変更・削除、パスワード（[下記](#ワンタイムパスワードoath)と同じ） |
+| OTP スロット | BOOT を押すと打つ内容（静的パスワード・HOTP）、チャレンジレスポンス（HMAC-SHA1） |
+| ファーム | USB 経由の更新、LED の色合わせ・色順、再起動 |
+
+- スマートカード（CCID）経由で話すので、管理者権限は要らない。キーは挿し替えると自動で切り替わる
+- BOOT / タッチを待つときは、ウィンドウの右下に案内が出る
+- パスキーの一覧に出るのは、キーの中に保存されるもの（discoverable credential）だけ。サイトによっては、キーに保存しない形で登録する（ログインはできるが一覧には出ない）
+- 依存パッケージの版は `tools/gui/pyproject.toml` と `uv.lock` で固定している
 
 ### 本人確認
 
@@ -231,6 +255,7 @@ uv run --no-project --with pyscard python -I tools\fwupdate.py led-check
 | `esp32s3-fido-<版>-devsb.zip` | 段階 B+（B ＋セキュアブート）用。作者の鍵（[`keys/`](keys/)）で署名済み |
 | `esp32s3-fido-<版>-release.zip` | 段階 C（本番）用。作者の鍵で署名済み |
 | `esp32s3-fido-<版>-app-sb.bin` / `-app-rel.bin` | USB 更新用の署名済みアプリ（B+ / C の基板用） |
+| `esp32s3-fido-manager-<版>.exe` | Windows 用の[管理ツール（GUI）](#管理ツールgui)。Actions でビルドし、証明付き |
 | `esp32s3-fido-<版>-devsb-unsigned.zip` / `-release-unsigned.zip` | Actions がビルドしたままの署名なしのもの。署名済みのものを確かめるための元 |
 | `SHA256SUMS` | 各ファイルの SHA-256 |
 
@@ -612,7 +637,7 @@ esptool --chip esp32s3 --port COMx write-flash --encrypt 0x20000 build\touchprob
 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）。
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos、AGPL-3.0-only。`patches/` の改造はその派生物で、同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`keys/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/oath.py`、`tools/sign_release.py`、`tools/verify_release.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`keys/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/oath.py`、`tools/gui/`、`tools/sign_release.py`、`tools/verify_release.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスに従う
 
 ファームを書き込んだキーを人に渡す場合は、対応するソース（このリポジトリと、ビルドに使ったコミット）を入手できるようにしてください。
