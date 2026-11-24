@@ -14,12 +14,10 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 ## 目次
 
 - [特長](#特長)
-- [必要なもの](#必要なもの)
-- [準備](#準備)
-- [ビルド](#ビルド)
-- [書き込み](#書き込み)
-- [配布バイナリ](#配布バイナリ)
-- [使い方](#使い方)
+- [はじめかた](#はじめかた) — 配布版を新品の基板に書き込んで使い始めるまで
+- [使い方](#使い方) — 本人確認、LED、PIN、ファームの更新、困ったとき
+- [配布バイナリの詳細](#配布バイナリの詳細) — ファームの一覧と、本物かどうかの確かめ方、ほかの書き込み方
+- [自分でビルドする](#自分でビルドする) — ESP-IDF でのビルドと、自分の鍵を使ったセキュアブート
 - [改造の詳細](#改造の詳細)
 - [タッチの測定ツール](#タッチの測定ツール)
 - [ライセンス](#ライセンス)
@@ -43,17 +41,236 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 | セキュアブート | 有効化すると作者署名のファームしか起動しない | 作者の鍵は使わない。自分の鍵で有効にする（devsb / release） |
 | パーティション | アプリ領域は1面（factory） | 2面（ota_0 / ota_1）。データ領域 part0 の位置は同じ |
 
-## 必要なもの
+## はじめかた
 
-- **ESP32-S3 SuperMini**（ESP32-S3FH4R2：フラッシュ 4MB、PSRAM 2MB、GPIO48 に WS2812 LED）
-  - PSRAM は必須（データ領域 1MB をコピーして読むため）
-- **タッチ電極**（任意）：GPIO1 に線をつなぎ、1〜2cm 角の銅テープなどを付けて薄い絶縁で覆う
-  - 端子だけでは面積が足りず、テープ1枚越しでは反応しない
-  - 使わない場合も BOOT ボタンで本人確認できる
+配布版のファームを、**新品の** SuperMini に書き込んで使い始めるまでの手順。ESP-IDF は要らない。
+書き込みは2回だけで、1回目（試験用の段階）で動作を確かめてから、2回目で本番の段階にする。
+
+> [!CAUTION]
+> この手順は eFuse を焼き、**元に戻せません。** 書き込んだ基板は、作者の鍵（[`keys/`](keys/)）で署名したファームしか起動しなくなります。
+> 自分の鍵を使いたい場合は、この手順を使わずに[自分でビルド](#自分でビルドする)してください。
+
+### 用意するもの
+
+- **ESP32-S3 SuperMini**（ESP32-S3FH4R2：フラッシュ 4MB、PSRAM 2MB、GPIO48 に WS2812 LED）。PSRAM の無い型は使えない
+- データ通信のできる USB-C ケーブル（充電専用のものは不可）
+- Windows の PC と [uv](https://docs.astral.sh/uv/)（`esptool` と付属のツールを動かすのに使う）
+- このリポジトリ一式（`git clone`、または GitHub の「Code → Download ZIP」）。付属のツール（`tools\`）と公開鍵（`keys\`）を使う
+- タッチ電極（任意）：GPIO1 に線をつなぎ、1〜2cm 角の銅テープなどを付けて薄い絶縁で覆う。無くても BOOT ボタンで本人確認できる
+
+以下のコマンドは、`tools\` を使うものはリポジトリのフォルダで、`esptool` を使うものは zip を展開したフォルダで実行する。`COMx` は基板の COM ポート（デバイス マネージャーの「ポート」に出る「USB シリアル デバイス」）に読み替える。
+
+### 1. ファームを取ってくる
+
+[Releases](https://github.com/alicecorecom/esp32s3-fido/releases/latest) から次の4つをダウンロードし、zip を展開する。
+
+- `esp32s3-fido-<版>-devsb.zip`（1回目に書く）
+- `esp32s3-fido-<版>-release.zip`（2回目に書く）
+- `esp32s3-fido-<版>-devsb-unsigned.zip` / `-release-unsigned.zip`（本物か確かめるのに使う）
+
+本物か確かめる（任意だが推奨）。最後に `OK` と出ればよい（詳しくは[本物か確かめる](#本物か確かめる)）。
+
+```powershell
+uv run --no-project --with esptool python -I tools\verify_release.py <保存先>\esp32s3-fido-<版>-devsb.zip <保存先>\esp32s3-fido-<版>-devsb-unsigned.zip
+uv run --no-project --with esptool python -I tools\verify_release.py <保存先>\esp32s3-fido-<版>-release.zip <保存先>\esp32s3-fido-<版>-release-unsigned.zip
+```
+
+### 2. 1回目の書き込み（試験用の段階 B+）
+
+1. 基板の **BOOT を押したまま RST を押して離し**、BOOT も離す（ダウンロードモード）。COM ポートが現れる
+2. 新品であることを確かめる。`SPI_BOOT_CRYPT_CNT` が `0x0`、`Secure Boot: Disabled`、`Key Purposes` が全部 0 であること
+   ```powershell
+   uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info
+   ```
+3. `devsb` の zip を展開したフォルダで書き込む
+   ```powershell
+   uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@flash_args"
+   ```
+4. **基板の RST を押す**（書き込みツールのリセットでは、ダウンロードモードから抜けないことがある）。最初の起動で、セキュアブートとフラッシュの暗号化を有効にし、鍵を eFuse に焼く（十数秒）。終わると LED が青く0.5秒光る
+
+### 3. 動作を確かめる
+
+1. **LED の色を合わせる**。基板によって LED の赤と緑が入れ替わっているため、最初に一度やっておく（[詳しく](#led-の赤と緑が逆のとき)）
+   ```powershell
+   uv run --no-project --with pyscard python -I tools\fwupdate.py led-check
+   ```
+   LED が赤・緑の順に光るので、何色に見えたかを答える。途中で LED が青く点滅したら BOOT を押すかタッチする
+2. **試しに使ってみる**
+   - PIN を設定する：Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」（PIN は[8文字以上](#pin-は8文字以上にする)）
+   - https://webauthn.io（Edge / Chrome）で登録し、**キーを抜き差しして**からログインできることを確かめる
+
+ここまでで問題があれば、次へ進まない（この段階なら、署名済みのファームで書き直せる）。
+
+### 4. 2回目の書き込み（本番の段階 C）
+
+1. もう一度ダウンロードモードに入れ（BOOT を押したまま RST）、状態を確かめる。`SPI_BOOT_CRYPT_CNT` が `0x1`、`Secure Boot: Enabled` であること
+   ```powershell
+   uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info
+   ```
+2. `release` の zip を展開したフォルダで書き込む（`--force` は、セキュアブートの有効な基板にブートローダを書くために要る）
+   ```powershell
+   uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_flash_args"
+   ```
+3. **基板の RST を押す**。最初の起動で、暗号化を本番のモードに切り替え、ダウンロードモードでフラッシュを読めないようにする
+4. キーを抜き差しして、手順 3 で登録したものでログインできることを確かめる
+
+### 5. 本番用にする
+
+1. 試験で登録したものを消すため、Windows の「セキュリティ キー」の画面で **リセット** する（キーの中の鍵も作り直される）
+2. PIN を設定し直し（8文字以上）、使うサービスに登録する
+
+以後のファームの更新は、挿したまま USB で行う（[ファームの更新](#ファームの更新)）。
+
+## 使い方
+
+### 本人確認
+
+ログインなどで本人確認を求められると、LED が青く速く点滅する。**タッチパッドに触れて離す** か **BOOT を押して離す**。15秒で時間切れになる。
+
+| LED | 意味 |
+|---|---|
+| 青で0.5秒光って消える | 挿して USB が使えるようになった |
+| 消灯 | 待機中・処理中 |
+| 青で速く点滅 | タッチ / BOOT 待ち |
+| 緑で0.5秒点灯 | 本人確認に成功 |
+| 赤で0.5秒点灯 | 時間切れ・キャンセル |
+| 赤でゆっくり点滅 | 挿して3秒経っても USB が使えない（充電専用ケーブルなど） |
+| 赤で速く点滅 | 起動時の致命的エラー（eFuse の鍵・データ領域）。起動を止めている |
+| 挿しても何も光らない | アプリが起動していない（[困ったとき](#困ったとき)） |
+
+### PIN は8文字以上にする
+
+PIN は **8文字以上**（英字や記号も混ぜられる。最大63バイト）にする。キーは間違いを8回で締め出すが、それだけに頼れないため。
+ファームも8文字未満の PIN を断る（Windows では「もう少し複雑な PIN にしてください」と出る）。この制限の前に設定した短い PIN はそのまま使えるので、PIN の変更で8文字以上にしておく。
+
+- フラッシュを丸ごと吸い出して後で書き戻すと、PIN の失敗回数も元に戻る（[Token2 の勧告](https://www.token2.com/img/T2-SA-RP2350-Dec2025.pdf)、pico-fido 共通）。これを繰り返せば PIN を総当たりできる
+- 勧告の見積もりでは、総当たりにかかる時間は **4桁で約8時間、6桁で約34日、8桁で約10年**
+- esp32s3-fido では、ダウンロードモードが開いている段階（dev / devenc / devsb）の間はこの吸い出しと書き戻しができる。本番の段階（release）ではダウンロードモードでフラッシュを読めず、フラッシュもチップに内蔵なので、かなり難しくなる
+- PIN の保存方法の弱さ（吸い出したデータから PIN を割り出せた）は、pico-fido の commit 6c85421 で直っていて、v8.2 に入っている
+
+### ファームの更新
+
+挿したまま USB で更新できる（ダウンロードモードも管理者権限も要らない）。登録済みのパスキーと PIN はそのまま残る。
+
+1. [Releases](https://github.com/alicecorecom/esp32s3-fido/releases/latest) から、キーの段階に合ったアプリをダウンロードする。[はじめかた](#はじめかた)のとおりに書いたキーなら `esp32s3-fido-<版>-app-rel.bin`
+2. 更新する
+   ```powershell
+   uv run --no-project --with pyscard python -I tools\fwupdate.py update <保存先>\esp32s3-fido-<版>-app-rel.bin
+   ```
+3. LED が青く点滅したら BOOT を押すかタッチする。30秒ほどで書き終わり、キーが再起動する
+4. `info` で新しい版になったことを確かめる
+   ```powershell
+   uv run --no-project --with pyscard python -I tools\fwupdate.py info
+   ```
+
+| キーの段階（`info` の表示） | 送るファイル |
+|---|---|
+| `secure boot: on`、`flash encryption: release` | `app-rel.bin` |
+| `secure boot: on`、`flash encryption: development` | `app-sb.bin` |
+| `secure boot: off` | dev / devenc の zip の `pico_fido.bin` |
+
+- 書き終わるとキー自身がイメージを検証する。セキュアブートの基板では **登録した鍵の署名と、巻き戻し防止の版番号も確かめ、合わなければ受け付けない**（ツール側の検査を飛ばしても同じ）
+- 新しいファームは「確認待ち」で起動し、USB がつながると自分を「正常」と記録する。記録しないまま再起動すると、ブートローダが前の版に戻す
+- `fwupdate.py` はキーの段階に合わないファイルを送らない（`+rel` のアプリは起動すると基板を本番の段階に切り替えるので、devsb の基板に送ると戻せない）。巻き戻し防止の版番号がキーより古いものも送らない
+- `fwupdate.py image <ファイル>` で、キーをつながずにファイルの版・ELF SHA-256・署名の有無を確かめられる。`info` の ELF SHA-256 は、配布 zip の `BUILDINFO.txt` と照らし合わせられる
+- 更新できるのはアプリだけで、ブートローダやパーティション表は更新できない
+
+### LED の赤と緑が逆のとき
+
+SuperMini に載っている LED は、個体によって色の順番が違う。**本人確認に成功すると赤、時間切れで緑**に見えたら、色の順番を合わせる。
+
+```powershell
+uv run --no-project --with pyscard python -I tools\fwupdate.py led-check
+```
+
+- LED を赤、続けて緑で3回ずつ点滅させ、「何色に見えたか」を聞く。答えから正しい順番を計算して設定し、最後にもう一度赤で確かめる
+- 設定するときに BOOT かタッチでの本人確認が要る。設定はデータ領域に残り、ファームを更新しても消えない
+- 順番がわかっていれば直接設定もできる：`led-order rgb`（標準の WS2812）、`led-order default`（既定の `grb`）。`info` で今の設定がわかる
+
+### 困ったとき
+
+| 症状 | 対処 |
+|---|---|
+| 書き込んだあと、何も光らない | 基板の **RST を押す**。書き込みツールのリセットでは、ダウンロードモードから抜けないことがある |
+| RST を押しても何も光らない | アプリが起動していない（署名の拒否、ファームの破損など）。ダウンロードモードに入れずに挿したまま、COM ポート（USB シリアル）の起動ログで理由がわかる（例：`Sig block 0 signed with untrusted key`） |
+| COM ポートが出てこない | ファームが動いている間は COM ポートは無い。書き込むときは BOOT を押したまま RST でダウンロードモードに入れる |
+| 成功すると赤、時間切れで緑に見える | [LED の赤と緑が逆のとき](#led-の赤と緑が逆のとき) |
+| 赤でゆっくり点滅する | USB のデータが通っていない。充電専用のケーブルや、電源だけの USB 口になっていないか |
+| 短い PIN が断られる | PIN は8文字以上にする |
+| `fwupdate.py` がファイルを送らない | キーの段階に合ったファイルか、`info` で確かめる（[ファームの更新](#ファームの更新)の表） |
+
+## 配布バイナリの詳細
+
+[Releases](https://github.com/alicecorecom/esp32s3-fido/releases) に、GitHub Actions（`.github/workflows/build.yml`）でビルドしたファームを置いている。
+
+| ファイル | 中身 |
+|---|---|
+| `esp32s3-fido-<版>-dev.zip` | 段階 A（暗号化なし）用 |
+| `esp32s3-fido-<版>-devenc.zip` | 段階 B（開発モードで暗号化）用 |
+| `esp32s3-fido-<版>-devsb.zip` | 段階 B+（B ＋セキュアブート）用。作者の鍵（[`keys/`](keys/)）で署名済み |
+| `esp32s3-fido-<版>-release.zip` | 段階 C（本番）用。作者の鍵で署名済み |
+| `esp32s3-fido-<版>-app-sb.bin` / `-app-rel.bin` | USB 更新用の署名済みアプリ（B+ / C の基板用） |
+| `esp32s3-fido-<版>-devsb-unsigned.zip` / `-release-unsigned.zip` | Actions がビルドしたままの署名なしのもの。署名済みのものを確かめるための元 |
+| `SHA256SUMS` | 各ファイルの SHA-256 |
+
+- 各 zip の `BUILDINFO.txt` に、アプリの版・巻き戻し防止の版番号・ELF SHA-256 と、各イメージの SHA-256 を書いてある
+- **配布版の B+ / C を書いた基板は、作者の鍵で署名したファームしか起動しなくなる**（初回起動で `keys/` の2本の鍵を eFuse に焼く。元に戻せない）
+
+### 本物か確かめる
+
+Actions がビルドした zip（dev / devenc / `*-unsigned`）には、このリポジトリの Actions でビルドしたことの証明（[artifact attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)）が付いている。
+[GitHub CLI](https://cli.github.com/) で確かめられる。
+
+```powershell
+gh attestation verify esp32s3-fido-<版>-devenc.zip --repo alicecorecom/esp32s3-fido
+```
+
+`Verification succeeded!` と出て、ビルドしたコミットとワークフローが表示されれば本物。
+
+署名済みのもの（devsb / release の zip と app）は、作者が手元で署名を足したもので、Actions の証明は付いていない。
+代わりに `tools/verify_release.py` で、**Actions がビルドしたもの（`*-unsigned.zip`）に署名のセクタを足しただけ**であることと、`keys/` の2本の鍵で署名されていることを確かめられる（GitHub CLI があれば `*-unsigned.zip` の証明も一緒に確かめる）。
+
+```powershell
+uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fido-<版>-devsb.zip esp32s3-fido-<版>-devsb-unsigned.zip
+uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fido-<版>-app-rel.bin esp32s3-fido-<版>-release-unsigned.zip
+```
+
+最後に `OK` と出れば本物。
+
+### ほかの書き込み方
+
+[はじめかた](#はじめかた)は、新品の基板を2回の書き込みで本番にする手順。段階を1つずつ確かめたい場合や、以前の版で段階 A / B にした基板を進める場合は、次のように書く（zip を展開したフォルダで実行）。段階の意味は[書き込みの段階](#書き込みの段階)を参照。
+
+```powershell
+# A. dev / B. devenc の初回
+uvx esptool --chip esp32s3 -p COMx write-flash "@flash_args"
+# B. devenc の2回目以降
+uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
+# B+. devsb（B を通った基板に。初回起動で作者の鍵を eFuse に焼く。元に戻せない）
+uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@encrypted_flash_args"
+# C. release（B+ を通った基板に。元に戻せない）
+uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_flash_args"
+```
+
+- 各段階で「PIN 設定 → 登録 → **抜き差し** → ログイン」まで確かめてから次へ進む。A を書いたら最初に `led-check` をしておく
+- B+ と C の前に `get-security-info` で基板の状態を確かめる。B を通った基板の B+ の前は `SPI_BOOT_CRYPT_CNT` が `0x1` で `Secure Boot: Disabled`、C の前は `0x1` で `Secure Boot: Enabled`。`idf.ps1` はこれを自動で確かめるが、esptool は確かめない
+- セキュアブートが有効な基板では、esptool はブートローダの領域に書くのを `--force` なしでは拒む（署名の合わないブートローダを書くと起動しなくなるため）。`--force` は、その基板に焼いた鍵で署名済みのものを書くときだけ付ける
+- 新品に release を直接書くこともできる仕組みだが、**実機で確かめていない**。失敗すると基板は二度と書き直せないので、[はじめかた](#はじめかた)のとおり B+ を通す
+
+### 配布物の作り方（作者向け）
+
+1. `v*` のタグを push すると、Actions が4つのプロファイルをビルドし、証明を付けて Release の下書きを作る
+2. 手元で `tools/sign_release.py --tag <タグ> --upload` を実行する。下書きの `*-unsigned.zip` の証明を確かめ、1Password の鍵で署名し、`verify_release.py` と同じ確認を通してから、署名済みの zip と app を下書きに足す
+3. 下書きの中身を確かめてから公開する
+
+## 自分でビルドする
+
+自分の鍵でセキュアブートを有効にしたい場合や、改造を加えたい場合は、ESP-IDF でビルドして書き込む。
+
+### 準備
+
 - **ESP-IDF v5.5.4**（pico-fido 公式ビルドと同じ版）
 - Windows + PowerShell（`idf.ps1` は PowerShell 用。Git Bash などの MSys 環境では ESP-IDF のツールが動かない）
-
-## 準備
 
 ESP-IDF を取得し、ツールと Python 環境を入れる。
 
@@ -68,7 +285,7 @@ $py = uv python find 3.12
 既定の場所は `D:\esp\v5.5.4\esp-idf` と `D:\esp\.espressif`。
 ほかの場所に置いた場合は、環境変数 `IDF_PATH` と `IDF_TOOLS_PATH` で指定する。
 
-## ビルド
+### ビルド
 
 ```powershell
 git submodule update --init --recursive
@@ -88,7 +305,7 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 - パーティションテーブルは全プロファイル共通で 0x10000 に置く（暗号化入りのブートローダは 0x80C0 バイトあり、標準の 0x8000 では収まらない）
 - パーティションは `config/partitions.csv`：アプリ領域 ota_0（0x20000）と ota_1（0x300000）の2面、データ領域 part0 は本家と同じ 0x200000。1面（factory）の版から書き直しても、登録済みのパスキーは残る
 
-## 書き込み
+### 書き込みの段階
 
 > [!CAUTION]
 > eFuse の書き込みとフラッシュ暗号化は **元に戻せません。** A → B → B+ → C の順に進め（新品の基板は[一発で B+](#新品の基板は一発で-b-から) から始められる）、
@@ -99,13 +316,14 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 | A. dev | `.\idf.ps1 dev -p COMx flash` | 初回起動で eFuse KEY3 を焼く | ファームは書き直せる |
 | B. devenc | 初回：`.\idf.ps1 devenc -p COMx flash`<br>以降：`.\idf.ps1 devenc -p COMx encrypted-flash` | 初回起動でブートローダがフラッシュを暗号化する（開発モード） | 暗号化は解除できないが、`encrypted-flash` で書き直せる |
 | B+. devsb | `.\idf.ps1 devsb -p COMx encrypted-flash` | B に加えて、初回起動でブートローダがセキュアブートを有効にする（[下記](#セキュアブートdevsb)） | **セキュアブートは解除できない。** 登録した鍵で署名すれば書き直せる |
-| C. release | `.\idf.ps1 release -p COMx encrypted-flash` | B+ と同じ鍵で署名して書く。起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。** ブートローダは二度と変えられない。アプリは [USB 経由の更新](#ファームの更新usb-経由) でしか変えられない |
+| C. release | `.\idf.ps1 release -p COMx encrypted-flash` | B+ と同じ鍵で署名して書く。起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。** ブートローダは二度と変えられない。アプリは [USB 経由の更新](#ファームの更新) でしか変えられない |
 
 - 書き込むと USB が FIDO2 デバイスに切り替わり、COM ポートは消える。書き直すときは **BOOT を押しながら RST** を押してダウンロードモードに入れる
 - 書き込んだあとは **基板の RST だけを押して** 起動する。USB 経由のリセットでは、手で入れたダウンロードモードから抜けられない
 - B の間は盗難対策にならない（他人が自分のファームを書き込み、HMAC 回路を使える。フラッシュを吸い出して書き戻せば PIN の失敗回数も戻せる）。大事なアカウントは C の後に登録する
 - C の後は、試験中の登録を消すため Windows の「セキュリティ キーのリセット」をする（親鍵も作り直される）
 - `idf.ps1 release` は、開発モードで暗号化済み **かつ** セキュアブートが有効な基板（B+ を通ったもの）にしか書かない（新品の基板を除く。下記）。`$env:ESP32S3_FIDO_RELEASE_OK = 'yes'` と、devsb と同じ `$env:ESP32S3_FIDO_SB_VAULT` / `$env:ESP32S3_FIDO_SB_KEYS` が要る
+- 自分でビルドしたアプリの USB 更新には、`idf.ps1 devsb` / `release` の書き込みで `build\<profile>\signed\` にできる署名済みの `pico_fido.bin` を送る
 
 ### 新品の基板は一発で B+ から
 
@@ -116,7 +334,7 @@ v0.1.3 以降、何も書いていない新品の基板（暗号化もセキュ�
 3. PIN 設定 → 登録 → 抜き差し → ログインと、`led-check` を確かめる
 4. 問題がなければ、通常どおり C（release）を書く
 
-- 試験済み（5台目）：新品から一発で B+ にした基板の eFuse の保護の状態（鍵の読み取り禁止、`WR_DIS_RD_DIS`、鍵の失効）は、段階を踏んで B+ にした基板と同じになった
+- 試験済み：新品から一発で B+ にした基板の eFuse の保護の状態（鍵の読み取り禁止、`WR_DIS_RD_DIS`、鍵の失効）は、段階を踏んで B+ にした基板と同じになった
 - 仕組みとしては、新品に **release を直接**書くこともできる（最初の起動で release モードの暗号化と secure download mode まで進む）。ただし **この経路は実機で確かめていない**。失敗すると基板は二度と書き直せないので、確かめるまでは上の手順（一発で B+ → C）を使う
 - ブートローダには、ロールバック（更新したアプリが USB の接続まで行けなければ、次の起動で前の面に戻す）と巻き戻し防止（`config/sdkconfig.common` の `CONFIG_BOOTLOADER_APP_SECURE_VERSION` より古いアプリを起動しない）を入れてある。C の後はブートローダを変えられないので、この2つは C の前に入っている必要がある
 - `SECURE_VERSION` を上げるのは、古い版を使わせたくない脆弱性を直したときだけ。上げた版が起動すると eFuse に焼かれ、上げられるのは全部で16回
@@ -127,7 +345,7 @@ v0.1.3 以降、何も書いていない新品の基板（暗号化もセキュ�
 
 - 鍵は 1Password に「ドキュメント」（PEM）として置く。`tools/sbsign.py` が `op document get` でメモリに読んで署名し、ディスクには書かない。署名のたびに 1Password の認証が要る
 - 初回起動で、ブートローダに付けた署名の数だけ eFuse の鍵枠（KEY0〜5 の空き）に公開鍵のダイジェストを焼き、残りの枠は失効させる。予備鍵も最初から付けておくこと（あとから足せない）
-- あわせて JTAG の無効化と `WR_DIS_RD_DIS`（以後、読み取り禁止の鍵を足せない）も焼く。HMAC の鍵（KEY3）を焼き終えた基板（段階 A を通ったもの）で行う
+- あわせて JTAG の無効化と `WR_DIS_RD_DIS`（以後、読み取り禁止の鍵を足せない）も焼く
 - フラッシュ暗号化は開発モードのまま、ダウンロードモードも開いたまま。登録した鍵で署名すれば何度でも書き直せる。**鍵を失くすと二度と書き換えられない**
 
 ```powershell
@@ -137,139 +355,8 @@ $env:ESP32S3_FIDO_SB_OK    = 'yes'                # セキュアブートがま�
 .\idf.ps1 devsb -p COMx encrypted-flash
 ```
 
-- `idf.ps1` は、開発モードで暗号化済みの基板か確かめ、ビルドし、ブートローダとアプリに全部の鍵で署名して検証してから書き込む
+- `idf.ps1` は、基板の状態を確かめ、ビルドし、ブートローダとアプリに全部の鍵で署名して検証してから書き込む
 - セキュアブートを有効にした構成では、ESP-IDF の `flash_args` にブートローダが入らない（`bootloader-flash_args` に分かれる）。`idf.ps1` は両方を合わせて書く
-- 書き込み後に挿しても LED が何も光らなければ、アプリが起動していない。COM ポート（USB シリアル）の起動ログに理由が出る（例：`Sig block 0 signed with untrusted key`）
-
-動作確認：
-- PIN の設定・変更・リセット：Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」（PIN は[8桁以上](#pin-は8桁以上にする)に）
-- 登録・ログイン：https://webauthn.io（Edge / Chrome）
-
-## 配布バイナリ
-
-[Releases](https://github.com/alicecorecom/esp32s3-fido/releases) に、GitHub Actions（`.github/workflows/build.yml`）でビルドしたファームを置いている。
-ESP-IDF が無くても、esptool だけで書き込める。
-
-| ファイル | 中身 |
-|---|---|
-| `esp32s3-fido-<版>-dev.zip` | 段階 A 用 |
-| `esp32s3-fido-<版>-devenc.zip` | 段階 B 用 |
-| `esp32s3-fido-<版>-devsb.zip` | 段階 B+ 用。作者の鍵（[`keys/`](keys/)）で署名済み |
-| `esp32s3-fido-<版>-release.zip` | 段階 C 用。作者の鍵で署名済み |
-| `esp32s3-fido-<版>-app-sb.bin` / `-app-rel.bin` | USB 更新用の署名済みアプリ（B+ / C の基板用） |
-| `esp32s3-fido-<版>-devsb-unsigned.zip` / `-release-unsigned.zip` | Actions がビルドしたままの署名なしのもの。署名済みのものを確かめるための元 |
-| `SHA256SUMS` | 各ファイルの SHA-256 |
-
-- 各 zip の `BUILDINFO.txt` に、アプリの版・巻き戻し防止の版番号・ELF SHA-256 と、各イメージの SHA-256 を書いてある。キーに入っているものは `tools/fwupdate.py info` の ELF SHA-256 と照らし合わせられる
-- **配布版の B+ を書いた基板は、作者の鍵で署名したファームしか起動しなくなる**（初回起動で `keys/` の2本の鍵を eFuse に焼く。元に戻せない）。自分の鍵を使いたい場合は、配布版の B+ / C を使わず、自分でビルドして `idf.ps1 devsb` で書く
-
-### 本物か確かめる
-
-Actions がビルドした zip（dev / devenc / `*-unsigned`）には、このリポジトリの Actions でビルドしたことの証明（[artifact attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)）が付いている。
-[GitHub CLI](https://cli.github.com/) で確かめられる。
-
-```powershell
-gh attestation verify esp32s3-fido-<版>-devenc.zip --repo alicecorecom/esp32s3-fido
-```
-
-`Verification succeeded!` と出て、ビルドしたコミットとワークフローが表示されれば本物。
-
-署名済みのもの（devsb / release の zip と app）は、作者が手元で署名を足したもので、Actions の証明は付いていない。
-代わりに `tools/verify_release.py` で、**Actions がビルドしたもの（`*-unsigned.zip`）に署名のセクタを足しただけ**であることと、`keys/` の2本の鍵で署名されていることを確かめられる（GitHub CLI があれば `*-unsigned.zip` の証明も一緒に確かめる）。
-
-```powershell
-uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fido-<版>-devsb.zip esp32s3-fido-<版>-devsb-unsigned.zip
-uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fido-<版>-app-sb.bin esp32s3-fido-<版>-devsb-unsigned.zip
-```
-
-最後に `OK` と出れば本物。
-
-### 書き込む
-
-zip を展開したフォルダで実行する。段階の進め方と注意は[書き込み](#書き込み)と同じで、**各段階で抜き差し後のログインまで確かめてから次へ進む**。
-
-新品の基板なら、A・B を飛ばして devsb.zip から始められる（[一発で B+](#新品の基板は一発で-b-から)）。
-
-```powershell
-# 新品の基板 → B+（devsb.zip の flash_args。暗号化せずに書く。初回起動で作者の鍵を eFuse に焼く。元に戻せない）
-uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@flash_args"
-# A. dev / B. devenc の初回
-uvx esptool --chip esp32s3 -p COMx write-flash "@flash_args"
-# B. devenc の2回目以降
-uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
-# B+. devsb（B を通った基板に。初回起動で作者の鍵を eFuse に焼く。元に戻せない）
-uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@encrypted_flash_args"
-# C. release（B+ を通った基板に。元に戻せない）
-uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_flash_args"
-```
-
-- 書き込み後に LED が光らないときは **基板の RST を押す**（USB 経由のリセットでは、ダウンロードモードから抜けないことがある）
-- **最初に起動したら（A の直後、または新品から B+ の直後）[`led-check`](#led-の赤と緑が逆のとき) で LED の色の順番を合わせておく**。合っていないと、以後の確認で成功（緑）と失敗（赤）を取り違える
-- B+ と C の前に、`uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info` で基板の状態を確かめる。新品から B+ の前は `SPI_BOOT_CRYPT_CNT` が `0x0`、`Secure Boot: Disabled`、`Key Purposes` が全部 0。B を通った基板の B+ の前は `0x1` で `Secure Boot: Disabled`、C の前は `0x1` で `Secure Boot: Enabled` であること。`idf.ps1` はこれを自動で確かめるが、esptool は確かめない
-- セキュアブートが有効な基板では、esptool はブートローダの領域に書くのを `--force` なしでは拒む（署名の合わないブートローダを書くと起動しなくなるため）。`--force` は、その基板に焼いた鍵で署名済みのものを書くときだけ付ける
-- B+ / C の後のアプリの更新は、USB 経由で行う（[ファームの更新](#ファームの更新usb-経由)）。B+ の基板には `app-sb.bin`、C の基板には `app-rel.bin` を送る。dev / devenc の基板には、それぞれの zip の `pico_fido.bin` を送る
-
-### 配布物の作り方（作者向け）
-
-1. `v*` のタグを push すると、Actions が4つのプロファイルをビルドし、証明を付けて Release の下書きを作る
-2. 手元で `tools/sign_release.py --tag <タグ> --upload` を実行する。下書きの `*-unsigned.zip` の証明を確かめ、1Password の鍵で署名し、`verify_release.py` と同じ確認を通してから、署名済みの zip と app を下書きに足す
-3. 下書きの中身を確かめてから公開する
-
-## 使い方
-
-本人確認を求められたら、**タッチパッドに触れて離す** か **BOOT を押して離す**。15秒で時間切れになる。
-
-| LED | 意味 |
-|---|---|
-| 青で0.5秒光って消える | 挿して USB が使えるようになった |
-| 消灯 | 待機中・処理中 |
-| 青で速く点滅 | タッチ / BOOT 待ち |
-| 緑で0.5秒点灯 | 本人確認に成功 |
-| 赤で0.5秒点灯 | 時間切れ・キャンセル |
-| 赤でゆっくり点滅 | 挿して3秒経っても USB が使えない（充電専用ケーブルなど） |
-| 赤で速く点滅 | 起動時の致命的エラー（eFuse の鍵・データ領域）。起動を止めている |
-| 挿しても何も光らない | アプリが起動していない（セキュアブートの署名の拒否、ファームの破損など）。LED はアプリが光らせるので、その手前のブートローダで止まると光らない。COM ポートの起動ログで理由がわかる |
-
-### LED の赤と緑が逆のとき
-
-SuperMini に載っている LED は、個体によって色の順番が違う。**本人確認に成功すると赤、時間切れで緑**に見えたら、色の順番を合わせる。
-初めて書き込んだあと（段階 A の直後）に一度 `led-check` をしておくと、以後の確認で色を見間違えない（v0.1.2 以降）。
-
-```powershell
-uv run --no-project --with pyscard python -I tools\fwupdate.py led-check
-```
-
-- LED を赤、続けて緑で3回ずつ点滅させ、「何色に見えたか」を聞く。答えから正しい順番を計算して設定し、最後にもう一度赤で確かめる
-- 設定するときに BOOT かタッチでの本人確認が要る。設定はデータ領域に残り、ファームを更新しても消えない
-- 順番がわかっていれば直接設定もできる：`led-order rgb`（標準の WS2812）、`led-order default`（既定の `grb`。作者の1〜3台目の LED がこの型）。`info` で今の設定がわかる
-
-### PIN は8桁以上にする
-
-PIN は **8桁以上**（英字や記号も混ぜられる。最大63バイト）にする。キーは間違いを8回で締め出すが、それだけに頼れないため。
-ファームも8文字未満の PIN を断る（Windows では「もう少し複雑な PIN にしてください」と出る）。この制限の前に設定した短い PIN はそのまま使えるので、PIN の変更で8文字以上にしておく。
-
-- フラッシュを丸ごと吸い出して後で書き戻すと、PIN の失敗回数も元に戻る（[Token2 の勧告](https://www.token2.com/img/T2-SA-RP2350-Dec2025.pdf)、pico-fido 共通）。これを繰り返せば PIN を総当たりできる
-- 勧告の見積もりでは、総当たりにかかる時間は **4桁で約8時間、6桁で約34日、8桁で約10年**
-- esp32s3-fido では、ダウンロードモードが開いている B / B+ の間はこの吸い出しと書き戻しができる。C（release）では secure download mode でフラッシュを読めず、フラッシュもチップに内蔵なので、かなり難しくなる
-- PIN の保存方法の弱さ（吸い出したデータから PIN を割り出せた）は、pico-fido の commit 6c85421 で直っていて、v8.2 に入っている
-
-### ファームの更新（USB 経由）
-
-ダウンロードモードに入れなくても、挿したまま USB でファームを更新できる。release（段階 C）にした後は、これが唯一の更新手段になる。
-スマートカード（CCID）経由なので、Windows でも管理者権限は要らない。
-
-```powershell
-uv run --no-project --with pyscard python -I tools\fwupdate.py info                                  # 起動中の面・版・状態
-uv run --no-project --with pyscard python -I tools\fwupdate.py update build\devsb\signed\pico_fido.bin  # 更新
-```
-
-- `update` を始めると LED が青く点滅するので、BOOT かタッチで本人確認する。そのあと、今使っていない方の面（ota_0 / ota_1）に書き込む（約 720KB で30秒ほど）
-- 書き終わるとキー自身がイメージを検証する。セキュアブートの基板では **登録した鍵の署名と、巻き戻し防止の版番号も確かめ、合わなければ受け付けない**（ツール側の検査を飛ばしても同じ）
-- 受け付けたら次の起動先をその面にして再起動する。新しいファームは「確認待ち」で起動し、USB がつながると自分を「正常」と記録する。記録しないまま再起動すると、ブートローダが前の面に戻す
-- 送るのはアプリ（`pico_fido.bin`）だけ。セキュアブートの基板には署名済みのもの（配布版の `app-sb.bin` / `app-rel.bin`、自分でビルドしたものは `idf.ps1 devsb` / `release` の書き込みで `build\<profile>\signed\` にできる）を送る。ブートローダやパーティション表は更新できない
-- アプリの版の末尾には、ビルドしたプロファイルの印（`+dev` / `+enc` / `+sb` / `+rel`）が付いている。`fwupdate.py` はキーの状態に合わない印のイメージを送らない（**`+rel` のアプリは起動すると基板を release に切り替えるので、B+ の基板に誤って送ると戻せない**）。巻き戻し防止の版番号がキーより古いイメージも送らない
-- `fwupdate.py image <ファイル>` で、キーをつながずにイメージの版・版番号・ELF SHA-256・署名の有無を確かめられる
-- データ領域（part0）には触れないので、登録済みのパスキーはそのまま残る
 
 ## 改造の詳細
 
@@ -451,7 +538,7 @@ rescue アプレットは本家の設定アプリ（PicoKey App）の窓口で�
 FIDO2 の既定は4文字で、本家は authenticatorConfig（setMinPINLength）で長くできるだけ。ESP では、設定が無いときの既定値（`DEFAULT_MIN_PIN_LENGTH`）を8にした。
 
 - getInfo の minPINLength も8を返す。PIN の設定・変更で8文字未満は `CTAP2_ERR_PIN_POLICY_VIOLATION` で断る
-- 理由は[PIN は8桁以上にする](#pin-は8桁以上にする)を参照（フラッシュの書き戻しで失敗回数が戻る攻撃）
+- 理由は[PIN は8桁以上にする](#pin-は8文字以上にする)を参照（フラッシュの書き戻しで失敗回数が戻る攻撃）
 - すでに設定してある短い PIN は使える（照合では長さを見ない）。セキュリティキーのリセット後も8文字
 - authenticatorConfig で8より長くはできる（短くはできない）
 
