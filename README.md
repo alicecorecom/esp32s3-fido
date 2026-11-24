@@ -18,6 +18,7 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 - [準備](#準備)
 - [ビルド](#ビルド)
 - [書き込み](#書き込み)
+- [配布バイナリ](#配布バイナリ)
 - [使い方](#使い方)
 - [改造の詳細](#改造の詳細)
 - [タッチの測定ツール](#タッチの測定ツール)
@@ -69,6 +70,7 @@ $py = uv python find 3.12
 git submodule update --init --recursive
 git -C pico-fido apply ../patches/pico-fido-esp32s3.patch
 git -C pico-fido/pico-keys-sdk apply ../../patches/pico-keys-sdk-esp32s3.patch
+Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネントの版を固定
 
 .\idf.ps1 dev build          # 暗号化なし            -> build\dev
 .\idf.ps1 devenc build       # 開発モードで暗号化    -> build\devenc
@@ -100,6 +102,42 @@ git -C pico-fido/pico-keys-sdk apply ../../patches/pico-keys-sdk-esp32s3.patch
 動作確認：
 - PIN の設定・変更・リセット：Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」
 - 登録・ログイン：https://webauthn.io（Edge / Chrome）
+
+## 配布バイナリ
+
+[Releases](https://github.com/alicecorecom/esp32s3-fido/releases) に、GitHub Actions（`.github/workflows/build.yml`）でビルドしたファームを置いている。
+ESP-IDF が無くても、esptool だけで書き込める。
+
+| ファイル | 中身 |
+|---|---|
+| `esp32s3-fido-<版>-dev.zip` | 段階 A 用 |
+| `esp32s3-fido-<版>-devenc.zip` | 段階 B 用 |
+| `esp32s3-fido-<版>-release.zip` | 段階 C 用（**戻せない**） |
+| `SHA256SUMS` | 各 zip の SHA-256 |
+
+### 本物か確かめる
+
+各 zip には、このリポジトリの Actions でビルドしたことの証明（[artifact attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)）が付いている。
+[GitHub CLI](https://cli.github.com/) で確かめられる。
+
+```powershell
+gh attestation verify esp32s3-fido-<版>-devenc.zip --repo alicecorecom/esp32s3-fido
+```
+
+`Verification succeeded!` と出て、ビルドしたコミットとワークフローが表示されれば本物。
+
+### 書き込む
+
+zip を展開したフォルダで実行する。段階の進め方と注意は[書き込み](#書き込み)と同じ。
+
+```powershell
+# A. dev / B. devenc の初回
+uvx esptool --chip esp32s3 -p COMx write-flash "@flash_args"
+# B. devenc の2回目以降、C. release（開発モードで暗号化済みの基板にだけ）
+uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
+```
+
+- `idf.ps1` の release の安全装置（開発モードで暗号化済みかの確認）は esptool には無い。release は、段階 B で動作を確かめた基板にだけ書き込むこと
 
 ## 使い方
 
@@ -215,12 +253,12 @@ Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を�
 </details>
 
 <details>
-<summary><b>8. USB の VID/PID と名前</b>（pico-fido の <code>CMakeLists.txt</code>、<code>src/usb/usb_descriptors.c</code>、<code>idf.ps1</code>）</summary>
+<summary><b>8. USB の VID/PID と名前</b>（pico-fido の <code>CMakeLists.txt</code>、<code>src/usb/usb_descriptors.c</code>）</summary>
 
 本家の既定は Raspberry Pi の VID（2E8A:10FE）で、メーカー名は作者名になっている。
 改造版は、ESP チップ搭載機器に無償で PID を割り当てている [Espressif の VID 0x303A](https://github.com/espressif/usb-pids) を使う。
 
-- VID/PID は `idf.ps1` の `$UsbVid` / `$UsbPid` で指定する（`-D USB_VID=… -D USB_PID=…` で CMake に渡す）
+- VID/PID の既定値はパッチで pico-fido の `CMakeLists.txt` に入れてある（303A:83F8）。変えるときは `idf.py` に `-D USB_VID=… -D USB_PID=…` を渡す
 - PID 0x83F8 は Espressif から割り当てを受けたこのプロジェクト専用の番号（[espressif/usb-pids#473](https://github.com/espressif/usb-pids/issues/473)）
 - メーカー名・製品名は `ESP32S3_FIDO_USB_MANUFACTURER` / `ESP32S3_FIDO_USB_PRODUCT` で変えられる
 - 認証器としての動作は VID/PID に依存しない（OS は HID の FIDO 用途ページで見分ける）。変えても登録は消えない
@@ -264,7 +302,7 @@ esptool --chip esp32s3 --port COMx write-flash --encrypt 0x20000 build\touchprob
 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）。
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos、AGPL-3.0-only。`patches/` の改造はその派生物で、同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスに従う
 
 ファームを書き込んだキーを人に渡す場合は、対応するソース（このリポジトリと、ビルドに使ったコミット）を入手できるようにしてください。

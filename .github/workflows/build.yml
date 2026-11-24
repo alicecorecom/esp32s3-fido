@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Builds dev / devenc / release, checks that no radio code is linked, and
+# attests the zips (gh attestation verify <zip> --repo alicecorecom/esp32s3-fido).
+# A v* tag also creates a draft GitHub Release with the zips.
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v5.5.4@sha256:b9f2d6ea1c19e0c9f7959bdb74a9e3c775642f9d0f3b841937c5fa3363db892b
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Apply patches
+        run: |
+          git config --global --add safe.directory '*'
+          git -C pico-fido apply ../patches/pico-fido-esp32s3.patch
+          git -C pico-fido/pico-keys-sdk apply ../../patches/pico-keys-sdk-esp32s3.patch
+          cp config/dependencies.lock pico-fido/dependencies.lock
+
+      - name: Build
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          for p in dev devenc release; do sh ci/build.sh "$p"; done
+
+      - name: Check that no radio code is linked
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          bad=0
+          for elf in build/*/pico_fido.elf; do
+            if xtensa-esp32s3-elf-nm "$elf" | grep -E ' [TtWw] (esp_wifi_|esp_bt_|esp_ble_|esp_now_|ieee80211_)'; then
+              echo "NG  $elf"; bad=1
+            else
+              echo "OK  $elf"
+            fi
+          done
+          exit $bad
+
+      - name: Package
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then version=$REF_NAME; else version=git-${GITHUB_SHA::7}; fi
+          sh ci/package.sh "$version"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+            --draft --verify-tag --title "$TAG" --notes "SHA-256 は SHA256SUMS を参照。確かめ方は README の「配布バイナリ」を参照。"

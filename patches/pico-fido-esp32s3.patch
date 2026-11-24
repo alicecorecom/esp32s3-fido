@@ -1,19 +1,20 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d41d04f..fd8c5b2 100644
+index d41d04f..f2f538c 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -17,8 +17,13 @@
+@@ -17,8 +17,14 @@
  
  cmake_minimum_required(VERSION 3.13)
  
 -set(USB_VID 0x2E8A)
 -set(USB_PID 0x10FE)
-+# esp32s3-fido: idf.ps1 passes its own USB_VID / USB_PID with -D.
++# esp32s3-fido: Espressif VID, PID 0x83F8 allocated to this project
++# (espressif/usb-pids issue #473). Override with -D USB_VID=... -D USB_PID=...
 +if(NOT DEFINED USB_VID)
-+    set(USB_VID 0x2E8A)
++    set(USB_VID 0x303A)
 +endif()
 +if(NOT DEFINED USB_PID)
-+    set(USB_PID 0x10FE)
++    set(USB_PID 0x83F8)
 +endif()
  
  if(ESP_PLATFORM)

@@ -34,12 +34,6 @@ if (-not $py) { throw "ESP-IDF python env not found under $ToolsPath" }
 # into CMake strings, where "\e" etc. would be parsed as escapes.
 $env:IDF_PATH = $env:IDF_PATH -replace '\\', '/'
 
-# USB VID/PID. 0x303A = Espressif's VID, free PIDs for ESP chips via
-# https://github.com/espressif/usb-pids. 0x83F8 is allocated to this project
-# (espressif/usb-pids issue #473).
-$UsbVid = '0x303A'
-$UsbPid = '0x83F8'
-
 $root = $PSScriptRoot
 $proj = Join-Path $root 'pico-fido'
 $build = Join-Path $root "build\$Profile"
@@ -87,6 +81,5 @@ if ($Profile -eq 'release' -and $flashActions) {
 # idf.py/CMake print progress on stderr; do not treat that as a PowerShell error.
 $ErrorActionPreference = 'Continue'
 & $py.FullName "$IdfPath\tools\idf.py" -C $proj -B $build `
-    -D "SDKCONFIG=$build\sdkconfig" -D "SDKCONFIG_DEFAULTS=$defaults" `
-    -D "USB_VID=$UsbVid" -D "USB_PID=$UsbPid" @IdfArgs
+    -D "SDKCONFIG=$build\sdkconfig" -D "SDKCONFIG_DEFAULTS=$defaults" @IdfArgs
 exit $LASTEXITCODE
