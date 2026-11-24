@@ -187,6 +187,8 @@ uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@encrypted_flash_args"
 uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_flash_args"
 ```
 
+- 書き込み後に LED が光らないときは **基板の RST を押す**（USB 経由のリセットでは、ダウンロードモードから抜けないことがある）
+- **A の直後に [`led-check`](#led-の赤と緑が逆のとき) で LED の色の順番を合わせておく**。合っていないと、以後の確認で成功（緑）と失敗（赤）を取り違える
 - B+ と C の前に、`uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info` で基板の状態を確かめる。B+ の前は `SPI_BOOT_CRYPT_CNT` が `0x1` で `Secure Boot: Disabled`、C の前は `0x1` で `Secure Boot: Enabled` であること。`idf.ps1` はこれを自動で確かめるが、esptool は確かめない
 - セキュアブートが有効な基板では、esptool はブートローダの領域に書くのを `--force` なしでは拒む（署名の合わないブートローダを書くと起動しなくなるため）。`--force` は、その基板に焼いた鍵で署名済みのものを書くときだけ付ける
 - B+ / C の後のアプリの更新は、USB 経由で行う（[ファームの更新](#ファームの更新usb-経由)）。B+ の基板には `app-sb.bin`、C の基板には `app-rel.bin` を送る。dev / devenc の基板には、それぞれの zip の `pico_fido.bin` を送る
@@ -214,15 +216,16 @@ uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_fla
 
 ### LED の赤と緑が逆のとき
 
-SuperMini に載っている LED は、個体によって色の順番が違う。**本人確認に成功すると赤、時間切れで緑**に見えたら、色の順番を変える（v0.1.1 以降）。
+SuperMini に載っている LED は、個体によって色の順番が違う。**本人確認に成功すると赤、時間切れで緑**に見えたら、色の順番を合わせる。
+初めて書き込んだあと（段階 A の直後）に一度 `led-check` をしておくと、以後の確認で色を見間違えない（v0.1.2 以降）。
 
 ```powershell
-uv run --no-project --with pyscard python -I tools\fwupdate.py led-order rgb       # 標準の WS2812（赤と緑が逆に見えた基板）
-uv run --no-project --with pyscard python -I tools\fwupdate.py led-order default   # 既定（grb）に戻す
+uv run --no-project --with pyscard python -I tools\fwupdate.py led-check
 ```
 
-- BOOT かタッチでの本人確認が要る。設定はデータ領域に残り、ファームを更新しても消えない
-- 既定の `grb` は、赤と緑を入れ替えて送る（作者の1〜3台目の LED がこの型）。`info` で今の設定がわかる
+- LED を赤、続けて緑で3回ずつ点滅させ、「何色に見えたか」を聞く。答えから正しい順番を計算して設定し、最後にもう一度赤で確かめる
+- 設定するときに BOOT かタッチでの本人確認が要る。設定はデータ領域に残り、ファームを更新しても消えない
+- 順番がわかっていれば直接設定もできる：`led-order rgb`（標準の WS2812）、`led-order default`（既定の `grb`。作者の1〜3台目の LED がこの型）。`info` で今の設定がわかる
 
 ### PIN は8桁以上にする
 
@@ -404,6 +407,7 @@ APDU で更新イメージを受け取るアプレット（AID `F0 65 73 70 66 6
 | 12 | END | `esp_ota_end()` でイメージを検証（セキュアブートなら署名も）し、次の起動先にする |
 | 13 / 14 | ABORT / REBOOT | 中止 / 応答を返してから再起動 |
 | 20 | LED ORDER | LED の色の順番（P1 = `PHY_LED_ORDER_*`、0xFF で既定）。**本人確認が必須**。PHY データのこの項目だけを書く（以前は rescue アプレットの役目） |
+| 21 | LED TEST | P1 = 1 赤 / 2 緑 / 3 青 を、今の色の順番で3回点滅させる（`led-check` が使う）。LED だけなので本人確認は求めない |
 
 - 書き込みは `esp_ota_begin(…, OTA_WITH_SEQUENTIAL_WRITES)` で、書くそばから消去する（1MB を一度に消すと命令が長く止まるため）
 - 別のアプレットが選ばれたら、書きかけのイメージは捨てる

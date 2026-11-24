@@ -6,7 +6,8 @@
     uv run --no-project --with pyscard python -I tools/fwupdate.py update build/devsb/signed/pico_fido.bin
     uv run --no-project --with pyscard python -I tools/fwupdate.py reboot
     uv run --no-project --with pyscard python -I tools/fwupdate.py image pico_fido.bin   # no key needed
-    uv run --no-project --with pyscard python -I tools/fwupdate.py led-order rgb         # LED colour order
+    uv run --no-project --with pyscard python -I tools/fwupdate.py led-check             # find the LED colour order
+    uv run --no-project --with pyscard python -I tools/fwupdate.py led-order rgb         # set it directly
 
 `update` writes the image into the other OTA slot (press BOOT or touch the
 pad when the LED blinks blue), lets the key check it (signature and secure
@@ -23,6 +24,8 @@ from smartcard.System import readers
 
 AID = [0xF0] + list(b"espfido")
 LED_ORDERS = ["rgb", "rbg", "grb", "gbr", "brg", "bgr"]   # PHY_LED_ORDER_* 0..5
+DEFAULT_LED_ORDER = 2                                     # firmware default: grb
+COLOURS = ["red", "green", "blue"]
 CHUNK = 240                     # short APDUs: data <= 255 bytes incl. the 4-byte offset
 STATES = {0: "new", 1: "pending verify", 2: "valid", 3: "invalid", 4: "aborted", 0xFFFFFFFF: "undefined", 0xFF: "unknown"}
 SW_TEXT = {
@@ -176,6 +179,60 @@ def update(c, path, reboot, local_check=True):
         print("rebooting; check with `info` after the key is back")
 
 
+def set_led_order(c, p1):
+    print("press BOOT or touch the pad (LED blinks blue) ...")
+    _, sw1, sw2 = c.transmit([0x80, 0x20, p1, 0x00])
+    sw = (sw1 << 8) | sw2
+    if sw == 0x6D00:
+        raise KeyError_("this firmware has no LED order setting (v0.1.1 or later)")
+    if sw != 0x9000:
+        raise KeyError_(f"LED order: SW {sw:04X} {SW_TEXT.get(sw, '')}".rstrip())
+
+
+def ask_colour(c, colour):
+    """Blink logical `colour` (0 red, 1 green, 2 blue) and ask what the user saw."""
+    while True:
+        _, sw1, sw2 = c.transmit([0x80, 0x21, colour + 1, 0x00])
+        if (sw1, sw2) == (0x6D, 0x00):
+            raise KeyError_("this firmware has no LED test (v0.1.2 or later); use led-order")
+        a = input("  the LED blinks 3 times. What colour? [r]ed / [g]reen / [b]lue / [a]gain: ").strip().lower()[:1]
+        if a in ("r", "g", "b"):
+            return "rgb".index(a)
+
+
+def led_check(c):
+    """The firmware places logical (r, g, b) into the WS2812 (R, G, B) slots as
+    sel[slot] (led_neopixel.c, sel = the order's letters); the LED then shows
+    slot j as some physical colour phys[j]. What the user sees for logical c is
+    phys[sel^-1(c)], so phys[j] = seen(sel[j]), and the order that makes every
+    colour right is sel' = phys."""
+    i = info(c)
+    cur = i["led_order"]
+    if cur is None:
+        raise KeyError_("this firmware does not report the LED order (v0.1.1 or later)")
+    order = DEFAULT_LED_ORDER if cur == 0xFF else cur
+    sel = ["rgb".index(ch) for ch in LED_ORDERS[order]]
+    print(f"current LED order: {LED_ORDERS[order]}{' (default)' if cur == 0xFF else ''}")
+    print("1/2: red")
+    seen_r = ask_colour(c, 0)
+    print("2/2: green")
+    seen_g = ask_colour(c, 1)
+    if seen_r == seen_g:
+        raise KeyError_("red and green cannot look the same; run led-check again")
+    seen = {0: seen_r, 1: seen_g, 2: 3 - seen_r - seen_g}
+    phys = [seen[sel[j]] for j in range(3)]
+    new = "".join("rgb"[x] for x in phys)
+    if new == LED_ORDERS[order]:
+        print(f"colours are right, nothing to change ({new})")
+        return
+    print(f"setting the LED order to {new}")
+    set_led_order(c, 0xFF if LED_ORDERS.index(new) == DEFAULT_LED_ORDER else LED_ORDERS.index(new))
+    print("check: red")
+    if ask_colour(c, 0) != 0:
+        raise KeyError_("still not red; run led-check again")
+    print(f"done: LED order {new}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--reader", help="part of the smart card reader name, if several keys are plugged in")
@@ -186,6 +243,7 @@ def main():
     u.add_argument("--no-reboot", action="store_true")
     u.add_argument("--skip-local-check", action="store_true", help=argparse.SUPPRESS)  # tests the key's own checks
     sub.add_parser("reboot")
+    sub.add_parser("led-check", help="blink red / green, ask what you see, fix the LED colour order")
     lo = sub.add_parser("led-order", help="set the LED colour order (press BOOT / touch)")
     lo.add_argument("order", choices=LED_ORDERS + ["default"],
                     help="grb (default) for boards whose red and green come out swapped with rgb; rgb for a standard WS2812")
@@ -205,15 +263,10 @@ def main():
         c = find_key(a.reader)
         if a.action == "info":
             print_info(info(c))
+        elif a.action == "led-check":
+            led_check(c)
         elif a.action == "led-order":
-            p1 = 0xFF if a.order == "default" else LED_ORDERS.index(a.order)
-            print("press BOOT or touch the pad (LED blinks blue) ...")
-            resp, sw1, sw2 = c.transmit([0x80, 0x20, p1, 0x00])
-            sw = (sw1 << 8) | sw2
-            if sw == 0x6D00:
-                raise KeyError_("this firmware has no LED order setting (v0.1.1 or later)")
-            if sw != 0x9000:
-                raise KeyError_(f"LED order: SW {sw:04X} {SW_TEXT.get(sw, '')}".rstrip())
+            set_led_order(c, 0xFF if a.order == "default" else LED_ORDERS.index(a.order))
             print(f"LED order set to {a.order}")
         elif a.action == "update":
             update(c, a.image, not a.no_reboot, not a.skip_local_check)

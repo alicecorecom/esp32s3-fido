@@ -246,10 +246,10 @@ index 5ac7185..4e5c794 100644
      FLASH_SIZE_BYTES = part0->size;
 diff --git a/src/fw_update.c b/src/fw_update.c
 new file mode 100644
-index 0000000..cad1233
+index 0000000..b1851c5
 --- /dev/null
 +++ b/src/fw_update.c
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,309 @@
 +/*
 + * esp32s3-fido: firmware update over USB (CCID / WCID APDUs).
 + * Copyright (c) 2026 Alice Core
@@ -272,6 +272,10 @@ index 0000000..cad1233
 + *   INS 0x14 REBOOT  restarts after the response has been sent.
 + *   INS 0x20 LED ORDER  P1 = PHY_LED_ORDER_* (0..5), or 0xFF for the
 + *                     firmware default. Asks for presence.
++ *   INS 0x21 LED TEST   P1 = 1 red, 2 green, 3 blue: blinks that colour 3 times
++ *                     through the current colour order (tools/fwupdate.py
++ *                     led-check asks the user what they see). LED only, no
++ *                     presence needed.
 + *                     Stored in the PHY data (part0), so it survives updates.
 + */
 +#ifdef ESP_PLATFORM
@@ -281,6 +285,7 @@ index 0000000..cad1233
 +#include "button.h"
 +#include "usb.h"
 +#include "phy.h"
++#include "led/led.h"
 +#include "esp_ota_ops.h"
 +#include "esp_app_desc.h"
 +#include "esp_efuse.h"
@@ -503,6 +508,15 @@ index 0000000..cad1233
 +    return SW_OK();
 +}
 +
++static int fw_update_led_test(void) {
++    uint8_t color = P1(apdu);
++    if (color < LED_COLOR_RED || color > LED_COLOR_BLUE) {
++        return SW_INCORRECT_P1P2();
++    }
++    led_blink_n_times(3, color, 700, 300);
++    return SW_OK();
++}
++
 +static const cmd_t cmds[] = {
 +    { 0x01, fw_update_info },
 +    { 0x10, fw_update_begin },
@@ -511,6 +525,7 @@ index 0000000..cad1233
 +    { 0x13, fw_update_cancel },
 +    { 0x14, fw_update_reboot },
 +    { 0x20, fw_update_led_order },
++    { 0x21, fw_update_led_test },
 +    { 0x00, 0x0 }
 +};
 +
