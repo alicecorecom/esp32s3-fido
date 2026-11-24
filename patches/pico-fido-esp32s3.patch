@@ -37,6 +37,63 @@ index 0a0a48c..1e7d568 100644
  
  static const uint8_t *volatile cbor_data = NULL;
  static volatile size_t cbor_len = 0;
+diff --git a/src/fido/cbor_client_pin.c b/src/fido/cbor_client_pin.c
+index c26f392..6082975 100644
+--- a/src/fido/cbor_client_pin.c
++++ b/src/fido/cbor_client_pin.c
+@@ -52,7 +52,7 @@ static int minpin_read_length(const file_t *ef, uint8_t *min_pin) {
+     if (!min_pin) {
+         return PICOKEYS_ERR_NULL_PARAM;
+     }
+-    *min_pin = 4;
++    *min_pin = DEFAULT_MIN_PIN_LENGTH;
+     if (!ef || !ef->data) {
+         return PICOKEYS_OK;
+     }
+@@ -540,7 +540,7 @@ int cbor_client_pin(const uint8_t *data, size_t len) {
+             pin_byte_len++;
+         }
+         uint16_t pin_codepoints = pin_codepoint_len(paddedNewPin, pin_byte_len);
+-        uint8_t minPin = 4;
++        uint8_t minPin = DEFAULT_MIN_PIN_LENGTH;
+         file_t *ef_minpin = file_search_by_fid(EF_MINPINLEN, NULL, SPECIFY_EF);
+         if (minpin_read_length(ef_minpin, &minPin) != PICOKEYS_OK) {
+             CBOR_ERROR(CTAP2_ERR_PROCESSING);
+@@ -718,7 +718,7 @@ int cbor_client_pin(const uint8_t *data, size_t len) {
+             pin_byte_len++;
+         }
+         uint16_t pin_codepoints = pin_codepoint_len(paddedNewPin, pin_byte_len);
+-        uint8_t minPin = 4;
++        uint8_t minPin = DEFAULT_MIN_PIN_LENGTH;
+         file_t *ef_minpin = file_search_by_fid(EF_MINPINLEN, NULL, SPECIFY_EF);
+         if (minpin_read_length(ef_minpin, &minPin) != PICOKEYS_OK) {
+             CBOR_ERROR(CTAP2_ERR_PROCESSING);
+diff --git a/src/fido/cbor_config.c b/src/fido/cbor_config.c
+index 7cd66ec..309bd4e 100644
+--- a/src/fido/cbor_config.c
++++ b/src/fido/cbor_config.c
+@@ -358,7 +358,7 @@ int cbor_config(const uint8_t *data, size_t len) {
+         }
+     }
+     else if (subcommand == 0x03) {
+-        uint8_t currentMinPinLen = 4;
++        uint8_t currentMinPinLen = DEFAULT_MIN_PIN_LENGTH;
+         file_t *ef_minpin = file_search_by_fid(EF_MINPINLEN, NULL, SPECIFY_EF);
+         if (ef_minpin && ef_minpin->data && file_read_at(ef_minpin, 0, BYTE_ARRAY(&currentMinPinLen, sizeof(currentMinPinLen))) != PICOKEYS_OK) {
+             CBOR_ERROR(CTAP2_ERR_PROCESSING);
+diff --git a/src/fido/cbor_get_info.c b/src/fido/cbor_get_info.c
+index 80c26fb..6c7ff2f 100644
+--- a/src/fido/cbor_get_info.c
++++ b/src/fido/cbor_get_info.c
+@@ -216,7 +216,7 @@ int cbor_get_info(void) {
+         CBOR_CHECK(cbor_encode_uint(&mapEncoder, *file_get_data(ef_minpin))); // minPINLength
+     }
+     else {
+-        CBOR_CHECK(cbor_encode_uint(&mapEncoder, 4)); // minPINLength
++        CBOR_CHECK(cbor_encode_uint(&mapEncoder, DEFAULT_MIN_PIN_LENGTH)); // minPINLength
+ 
+     }
+     CBOR_CHECK(cbor_encode_uint(&mapEncoder, 0x0E));
 diff --git a/src/fido/fido.c b/src/fido/fido.c
 index 93120fd..130b163 100644
 --- a/src/fido/fido.c
@@ -53,3 +110,22 @@ index 93120fd..130b163 100644
      led_blink_n_times(3, LED_COLOR_GREEN, 100, 100);
  #endif
  }
+diff --git a/src/fido/fido.h b/src/fido/fido.h
+index 100e07a..24fe71c 100644
+--- a/src/fido/fido.h
++++ b/src/fido/fido.h
+@@ -112,6 +112,14 @@ extern void set_opts(uint8_t);
+ #define MAX_CREDBLOB_LENGTH       128
+ #define MAX_MSG_SIZE              1024
+ #define MAX_PIN_LENGTH            63
++/* esp32s3-fido: minimum PIN length while none has been set with
++ * authenticatorConfig (CTAP default 4). A snapshot restore of the flash resets
++ * the retry counter, so a short PIN can be brute-forced (README). */
++#ifdef ESP_PLATFORM
++#define DEFAULT_MIN_PIN_LENGTH 8
++#else
++#define DEFAULT_MIN_PIN_LENGTH 4
++#endif
+ #define MAX_FRAGMENT_LENGTH       (MAX_MSG_SIZE - 64)
+ #define MAX_LARGE_BLOB_SIZE       2048
+ #define MAX_RPIDS_MINPIN_LENGTH   120

@@ -824,10 +824,37 @@ index e75ade7..46f4327 100644
 +    *otp_key_2_out = _otp_key_2;
  }
 diff --git a/src/rescue.c b/src/rescue.c
-index 772fa3c..5ff70e9 100644
+index 772fa3c..6e2db68 100644
 --- a/src/rescue.c
 +++ b/src/rescue.c
-@@ -331,7 +331,8 @@ static int cmd_keydev_sign(void) {
+@@ -73,7 +73,7 @@ extern uint8_t PICO_PRODUCT;
+ extern uint8_t PICO_VERSION_MAJOR;
+ extern uint8_t PICO_VERSION_MINOR;
+ 
+-static int rescue_select(app_t *a, uint8_t force) {
++static int __attribute__((unused)) rescue_select(app_t *a, uint8_t force) {  /* esp32s3-fido: not registered on ESP */
+     a->process_apdu = rescue_process_apdu;
+     a->unload = rescue_unload;
+     res_APDU_size = 0;
+@@ -104,9 +104,17 @@ WEAK int set_atr(void) {
+     return 0;
+ }
+ 
++/* esp32s3-fido: the rescue applet is not registered on ESP. It is the
++ * PicoKey App's channel: rewriting the PHY settings (e.g. a presence timeout
++ * of 0, i.e. no BOOT/touch), signing arbitrary data with the device key, and
++ * burning the author's Secure Boot key. All settings are firmware defaults
++ * here and Secure Boot uses our own keys, so none of it is needed.
++ * rescue_migrate_keydev() (called from main.c at boot) stays. */
++#ifndef ESP_PLATFORM
+ INITIALIZER ( rescue_ctor ) {
+     register_app(rescue_select, rescue_aid);
+ }
++#endif
+ 
+ static int rescue_unload(void) {
+     return PICOKEYS_OK;
+@@ -331,7 +339,8 @@ static int cmd_keydev_sign(void) {
  }
  
  static void led_3_blinks(void) {

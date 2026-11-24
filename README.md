@@ -32,6 +32,9 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 | フラッシュと eFuse を吸い出されたら | 親鍵を復元される | 復元できない（release 時） |
 | フラッシュ暗号化 | 有効にするとデータが読めなくなる | 使える |
 | 本人確認 | 既定で無効 | BOOT ボタンかタッチパッドを待つ |
+| PIN の最短の長さ | 4文字（FIDO2 の既定） | 8文字 |
+| rescue アプレット（PicoKey App の窓口） | あり（設定の書き換え、デバイス鍵での署名、作者鍵のセキュアブート） | 外した |
+| ファームの更新 | PicoKey App / ダウンロードモード | USB（CCID）経由、本人確認＋署名の確認つき |
 | 挿したときの Chrome の通知 | 「Pico Key detected」が毎回出る | 出ない |
 | LED | 常に点滅 | 待機中は消灯、必要なときだけ光る |
 | 乱数 | SAR ADC エントロピーを常時有効（タッチが使えない） | 起動時に CTR-DRBG を初期化 |
@@ -184,6 +187,7 @@ uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
 ### PIN は8桁以上にする
 
 PIN は **8桁以上**（英字や記号も混ぜられる。最大63バイト）にする。キーは間違いを8回で締め出すが、それだけに頼れないため。
+ファームも8文字未満の PIN を断る（Windows では「もう少し複雑な PIN にしてください」と出る）。この制限の前に設定した短い PIN はそのまま使えるので、PIN の変更で8文字以上にしておく。
 
 - フラッシュを丸ごと吸い出して後で書き戻すと、PIN の失敗回数も元に戻る（[Token2 の勧告](https://www.token2.com/img/T2-SA-RP2350-Dec2025.pdf)、pico-fido 共通）。これを繰り返せば PIN を総当たりできる
 - 勧告の見積もりでは、総当たりにかかる時間は **4桁で約8時間、6桁で約34日、8桁で約10年**
@@ -361,6 +365,45 @@ APDU で更新イメージを受け取るアプレット（AID `F0 65 73 70 66 6
 - 書き込みは `esp_ota_begin(…, OTA_WITH_SEQUENTIAL_WRITES)` で、書くそばから消去する（1MB を一度に消すと命令が長く止まるため）
 - 別のアプレットが選ばれたら、書きかけのイメージは捨てる
 - 試験済み（1台目、devsb）：本番の鍵で署名したものは受け付けて ota_0 → ota_1 に切り替わる。登録していない鍵の署名は END で拒否。「正常」と記録しない版に更新して再起動すると、前の面に戻る
+
+</details>
+
+<details>
+<summary><b>12. rescue アプレットを外す</b>（<code>src/rescue.c</code>）</summary>
+
+rescue アプレットは本家の設定アプリ（PicoKey App）の窓口で、次のことができる。どれも本人確認は要るが、esp32s3-fido には要らない窓口なので、ESP では登録しない（選ぶと `6A82`）。
+
+- 設定（PHY）の書き換え：VID/PID、LED、**本人確認の待ち時間**（0 にすると BOOT / タッチを待たずに通る）など
+- デバイス鍵（eFuse の HMAC 鍵から作る secp256k1 鍵）で、渡された32バイトに署名する
+- **作者の鍵でセキュアブートの eFuse を焼く**（以後、作者が署名したファームしか起動しない。元に戻せない）
+
+設定はすべてファームの既定値に入れてあり、セキュアブートは自分の鍵で有効にする（devsb / release）ので、失うものは無い。
+起動時に呼ばれるデバイス鍵の移行処理（`rescue_migrate_keydev()`）は残している。
+
+</details>
+
+<details>
+<summary><b>13. PIN の最短の長さを8文字にする</b>（pico-fido の <code>src/fido/fido.h</code>、<code>cbor_client_pin.c</code>、<code>cbor_config.c</code>、<code>cbor_get_info.c</code>）</summary>
+
+FIDO2 の既定は4文字で、本家は authenticatorConfig（setMinPINLength）で長くできるだけ。ESP では、設定が無いときの既定値（`DEFAULT_MIN_PIN_LENGTH`）を8にした。
+
+- getInfo の minPINLength も8を返す。PIN の設定・変更で8文字未満は `CTAP2_ERR_PIN_POLICY_VIOLATION` で断る
+- 理由は[PIN は8桁以上にする](#pin-は8桁以上にする)を参照（フラッシュの書き戻しで失敗回数が戻る攻撃）
+- すでに設定してある短い PIN は使える（照合では長さを見ない）。セキュリティキーのリセット後も8文字
+- authenticatorConfig で8より長くはできる（短くはできない）
+
+</details>
+
+<details>
+<summary>ハードウェア AES はそのまま使う（検討した結果）</summary>
+
+ESP32-S3 には、汎用の AES 回路の鍵を電圧グリッチで取り出せるという勧告がある（[AR2026-005](https://documentation.espressif.com/AR2026-005_Security_Advisory_Concerning_AES_Key_Recovery_Using_Voltage_Fault_Injection_on%20ESP32-S3_EN.html)。フラッシュ暗号化の XTS-AES とは別の回路）。pico-fido では、パスキー本体は ChaCha20-Poly1305（ソフトウェア）で暗号化し、PIN で守るデータやファイルの AES-GCM と OTP がハードウェア AES を使う。
+
+- 攻撃には基板の改造と FPGA のグリッチ装置が要り、Espressif の評価は「影響は低い」
+- ソフトウェアの AES に替えても、CPU へのグリッチや電力解析に同じように弱いので、対策にならない
+- 鍵はキーごとに違う（eFuse の HMAC 鍵から導出）ので、勧告が推す「デバイスごとに一意の鍵」は満たしている
+
+物理的に盗まれたキーを専門の装置で解析されることへの耐性は、市販のセキュリティキーに及ばない（冒頭の注意を参照）。
 
 </details>
 
