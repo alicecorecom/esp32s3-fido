@@ -15,7 +15,7 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 
 - [特長](#特長)
 - [はじめかた](#はじめかた) — 配布版を新品の基板に書き込んで使い始めるまで
-- [使い方](#使い方) — 本人確認、LED、PIN、ファームの更新、困ったとき
+- [使い方](#使い方) — 本人確認、LED、PIN、ファームの更新、ワンタイムパスワード、困ったとき
 - [配布バイナリの詳細](#配布バイナリの詳細) — ファームの一覧と、本物かどうかの確かめ方、ほかの書き込み方
 - [自分でビルドする](#自分でビルドする) — ESP-IDF でのビルドと、自分の鍵を使ったセキュアブート
 - [改造の詳細](#改造の詳細)
@@ -174,6 +174,27 @@ PIN は **8文字以上**（英字や記号も混ぜられる。最大63バイ�
 - `fwupdate.py` はキーの段階に合わないファイルを送らない（`+rel` のアプリは起動すると基板を本番の段階に切り替えるので、devsb の基板に送ると戻せない）。巻き戻し防止の版番号がキーより古いものも送らない
 - `fwupdate.py image <ファイル>` で、キーをつながずにファイルの版・ELF SHA-256・署名の有無を確かめられる。`info` の ELF SHA-256 は、配布 zip の `BUILDINFO.txt` と照らし合わせられる
 - 更新できるのはアプリだけで、ブートローダやパーティション表は更新できない
+
+### ワンタイムパスワード（OATH）
+
+Google Authenticator などと同じ6桁のコード（TOTP / HOTP）を、キーの中で作れる。秘密鍵はキーの中に暗号化して保存され、PC には残らない。
+キーは YubiKey と同じ OATH の仕組みを持っているが、USB の ID が違うため **Yubico Authenticator や `ykman` からは使えない**。代わりに `tools/oath.py` を使う。
+
+```powershell
+uv run --no-project --with yubikey-manager python -I tools\oath.py add            # 追加（QR コードの otpauth:// URL を貼る）
+uv run --no-project --with yubikey-manager python -I tools\oath.py add --issuer GitHub --name me --touch   # 秘密鍵（Base32）で追加、タッチ必須
+uv run --no-project --with yubikey-manager python -I tools\oath.py code           # 全部のコード
+uv run --no-project --with yubikey-manager python -I tools\oath.py code github    # 1つだけ
+uv run --no-project --with yubikey-manager python -I tools\oath.py list           # 一覧
+uv run --no-project --with yubikey-manager python -I tools\oath.py delete github  # 削除
+uv run --no-project --with yubikey-manager python -I tools\oath.py password set   # パスワードを付ける（clear で外す）
+```
+
+- URL や秘密鍵は、画面に表示されない入力欄で聞く（コマンドの引数には書かない。履歴に残るため）。URL は、サイトの QR コードを読み取るか、「コードを表示できない場合」などで出てくる文字列から作る
+- `--touch` を付けたアカウントは、コードを出すたびに BOOT かタッチが要る（LED が青く点滅する）
+- `password set` をすると、キーを挿した人がパスワードなしでコードを見られなくなる
+- アカウントの名前は `code` / `delete` で一部だけ書けばよい（`github` で `GitHub:me` に当たる）
+- セキュリティキーのリセット（FIDO）では消えない。消すときは `delete` で1つずつ消す
 
 ### LED の赤と緑が逆のとき
 
@@ -591,7 +612,7 @@ esptool --chip esp32s3 --port COMx write-flash --encrypt 0x20000 build\touchprob
 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）。
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos、AGPL-3.0-only。`patches/` の改造はその派生物で、同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`keys/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/sign_release.py`、`tools/verify_release.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`keys/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/oath.py`、`tools/sign_release.py`、`tools/verify_release.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスに従う
 
 ファームを書き込んだキーを人に渡す場合は、対応するソース（このリポジトリと、ビルドに使ったコミット）を入手できるようにしてください。
