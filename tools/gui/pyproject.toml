@@ -9,6 +9,7 @@ dependencies = [
     "yubikey-manager==5.9.2",
     "fido2==2.2.1",
     "pyscard==2.3.2",
+    "esptool==5.7.0",
 ]
 
 [tool.uv]

@@ -967,6 +967,202 @@ class FirmwarePage(Page):
         self.run(lambda: self.key.led_order_set(order), lambda _: self.refresh(), None, TOUCH)
 
 
+# ---------------------------------------------------------------- new key
+
+class ProvisionPage(Page):
+    """README's quick start: a new board -> B+ (check) -> C, with the published firmware."""
+
+    class Bridge(QObject):
+        line = pyqtSignal(str)
+        step = pyqtSignal(int, int)
+
+    def __init__(self, win):
+        super().__init__(win)
+        import provision
+        self.p = provision
+        self.fw = None
+        self.state = None
+        self.bridge = self.Bridge()
+        self.bridge.line.connect(self.append)
+        self.bridge.step.connect(lambda a, b: (self.progress.setMaximum(max(b, 1)), self.progress.setValue(a)))
+        lay = QVBoxLayout(self)
+        lay.addWidget(form_label(
+            "新品の SuperMini に、配布版のファームを書き込みます。1回目（B+）で動作を確かめてから、2回目で本番（C）にします。"
+            "どちらも eFuse を焼くので元に戻せません。書き込んだ基板は、作者の鍵で署名したファームしか起動しなくなります。"))
+
+        g = QGroupBox("1. ファーム")
+        h = QHBoxLayout(g)
+        self.fw_label = form_label("まだ選ばれていません")
+        h.addWidget(self.fw_label, 1)
+        b = QPushButton("最新版をダウンロード")
+        b.clicked.connect(self.fetch)
+        h.addWidget(b)
+        b = QPushButton("フォルダを選ぶ...")
+        b.clicked.connect(self.choose)
+        h.addWidget(b)
+        lay.addWidget(g)
+
+        g = QGroupBox("2. 基板（BOOT を押したまま RST を押して離し、BOOT も離す）")
+        f = QFormLayout(g)
+        self.ports = QComboBox()
+        b = QPushButton("状態を読む")
+        b.clicked.connect(self.read)
+        row = QHBoxLayout()
+        row.addWidget(self.ports, 1)
+        row.addWidget(b)
+        f.addRow("COM ポート：", row)
+        self.st = {k: form_label("—") for k in ("MAC", "段階", "次にできること")}
+        for k, lab in self.st.items():
+            f.addRow(k + "：", lab)
+        lay.addWidget(g)
+
+        g = QGroupBox("3. 書き込む")
+        v = QVBoxLayout(g)
+        self.write_btn = QPushButton("（状態を読むと、ここに次の書き込みが出ます）")
+        self.write_btn.setEnabled(False)
+        self.write_btn.clicked.connect(self.write)
+        v.addWidget(self.write_btn)
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        v.addWidget(self.progress)
+        self.after = form_label("")
+        v.addWidget(self.after)
+        lay.addWidget(g)
+
+        from PyQt6.QtWidgets import QPlainTextEdit
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(2000)
+        lay.addWidget(self.log, 1)
+
+        self.port_timer = QTimer(self)
+        self.port_timer.timeout.connect(self.scan_ports)
+        self.port_timer.start(1500)
+
+    # -- helpers
+    def append(self, text):
+        self.log.appendPlainText(text)
+
+    def say(self, text):                       # from the worker thread
+        self.bridge.line.emit(text)
+
+    def work(self, fn, ok, busy=""):
+        def err(e):
+            self.progress.setVisible(False)
+            if isinstance(e, self.p.Stop):
+                QMessageBox.warning(self, "止めました", str(e))
+            else:
+                show_error(e)
+            self.append(f"エラー：{explain(e)}")
+        self.win.worker.run(fn, ok, err, busy)
+
+    def scan_ports(self):
+        ports = self.p.download_ports()      # listing only: no I/O to the boards
+        if ports != [self.ports.itemText(i) for i in range(self.ports.count())]:
+            cur = self.ports.currentText()
+            self.ports.clear()
+            self.ports.addItems(ports)
+            if cur in ports:
+                self.ports.setCurrentText(cur)
+
+    def refresh(self):
+        self.scan_ports()
+
+    def key_changed(self):
+        pass
+
+    # -- firmware
+    def fetch(self):
+        import tempfile
+        dest = tempfile.mkdtemp(prefix="esp32s3-fido-")
+
+        def job():
+            self.p.fetch_latest(dest, self.say)
+            return self.p.Firmware(dest, self.say)
+        self.work(job, self.got_fw, "ダウンロードして確かめています")
+
+    def choose(self):
+        d = QFileDialog.getExistingDirectory(self, "devsb / release の zip（署名済みと -unsigned）があるフォルダ",
+                                             os.path.expanduser("~/Downloads"))
+        if d:
+            self.work(lambda: self.p.Firmware(d, self.say), self.got_fw, "確かめています")
+
+    def got_fw(self, fw):
+        self.fw = fw
+        self.fw_label.setText(f"{fw.version}（署名を確認" + ("、attestation も確認" if fw.attested else "。attestation は gh が無いので省略") + "）")
+        self.update_button()
+
+    # -- board
+    def read(self):
+        port = self.ports.currentText()
+        if not port:
+            QMessageBox.information(self, "基板", "ダウンロードモードの基板が見つかりません。BOOT を押したまま RST を押してください")
+            return
+        self.work(lambda: self.p.read_state(port, self.say), self.got_state, "基板の状態を読んでいます")
+
+    def got_state(self, st):
+        self.state = st
+        self.state_port = self.ports.currentText()
+        self.st["MAC"].setText(st["mac"])
+        self.st["段階"].setText(st["stage"])
+        self.st["次にできること"].setText(st["why"])
+        self.update_button()
+
+    def update_button(self):
+        nxt = self.state and self.state["next"]
+        text = {"devsb-new": "1回目を書き込む（新品 → B+）", "devsb-b": "B+ にする（B → B+）",
+                "release": "2回目を書き込む（B+ → 本番 C）"}.get(nxt, "書き込めるものはありません")
+        if nxt and self.fw is None:
+            text += "（先にファームを選んでください）"
+        self.write_btn.setText(text)
+        self.write_btn.setEnabled(bool(nxt) and self.fw is not None)
+
+    def write(self):
+        step = self.state["next"]
+        port = self.state_port
+        if step == "release":
+            box = QMessageBox(QMessageBox.Icon.Warning, "本番（C）にする",
+                              f"{port} の基板を本番の段階にします。元に戻せません。\n\n"
+                              "・ブートローダは二度と変えられません。ファームは USB 経由の更新でしか変えられません\n"
+                              "・ダウンロードモードでフラッシュを読めなくなります\n\n"
+                              "B+ の段階で、LED の色合わせ・PIN の設定・登録・抜き差し後のログインを確かめましたか？",
+                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            cb = QCheckBox("確かめた")
+            box.setCheckBox(cb)
+            if box.exec() != QMessageBox.StandardButton.Yes or not cb.isChecked():
+                return
+        else:
+            box = QMessageBox(QMessageBox.Icon.Warning, "B+ にする",
+                              f"{port} の基板に {self.fw.version} の devsb を書き込みます。\n\n"
+                              "最初の起動で、作者の鍵2本のダイジェストを eFuse に焼き、セキュアブートとフラッシュの暗号化を"
+                              "有効にします。元に戻せません。以後は作者の鍵で署名したファームしか起動しません。\n\n続けますか？",
+                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            if box.exec() != QMessageBox.StandardButton.Yes:
+                return
+        self.progress.setVisible(True)
+        self.progress.setValue(0)
+        self.write_btn.setEnabled(False)
+        fw = self.fw
+
+        def ok(sha):
+            self.progress.setVisible(False)
+            self.state = None
+            self.update_button()
+            if step == "release":
+                msg = ("書き込みました。基板の RST を押してください（BOOT は押さない）。\n\n"
+                       "起動したら：抜き差ししてログインを確かめる → 「パスキー」タブでリセット → PIN を設定し直す")
+            else:
+                msg = ("書き込みました。基板の RST を押してください（BOOT は押さない）。最初の起動は十数秒かかり、"
+                       "終わると LED が青く0.5秒光ります。\n\n"
+                       "起動したら：「ファーム」タブで LED の色合わせ → 「パスキー」タブで PIN を設定 → "
+                       "webauthn.io で登録し、抜き差ししてログイン → 問題なければ、もう一度ダウンロードモードにして2回目へ")
+            self.after.setText(msg)
+            QMessageBox.information(self, "書き込み", msg)
+        self.work(lambda: self.p.write(port, fw, step, self.say, self.bridge.step.emit), ok, "書き込んでいます")
+
+
 # ---------------------------------------------------------------- window
 
 class MainWindow(QMainWindow):
@@ -987,8 +1183,10 @@ class MainWindow(QMainWindow):
         top.addWidget(self.keys, 1)
         lay.addLayout(top)
         self.tabs = QTabWidget()
-        self.pages = [OverviewPage(self), FidoPage(self), OathPage(self), OtpPage(self), FirmwarePage(self)]
-        for p, name in zip(self.pages, ["状態", "パスキー（FIDO2）", "ワンタイムパスワード", "OTP スロット", "ファーム"]):
+        self.pages = [OverviewPage(self), FidoPage(self), OathPage(self), OtpPage(self), FirmwarePage(self),
+                      ProvisionPage(self)]
+        for p, name in zip(self.pages, ["状態", "パスキー（FIDO2）", "ワンタイムパスワード", "OTP スロット", "ファーム",
+                                        "キーを作る"]):
             self.tabs.addTab(p, name)
         self.tabs.currentChanged.connect(lambda i: self.pages[i].refresh())
         lay.addWidget(self.tabs, 1)

@@ -102,6 +102,8 @@ jobs:
           uv sync --project tools/gui --frozen --group build
           uv run --project tools/gui --frozen pyinstaller --noconfirm --clean --onefile --windowed \
             --name "esp32s3-fido-manager-$version" --paths tools --collect-data fido2 \
+            --collect-all esptool --collect-all espefuse --collect-all espsecure \
+            --add-data "$(pwd -W)/keys/*.pub.pem;keys" \
             --workpath build-gui --distpath dist-gui --specpath build-gui tools/gui/app.py
           ls -l dist-gui
 
