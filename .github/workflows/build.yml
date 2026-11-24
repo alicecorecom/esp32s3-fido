@@ -147,4 +147,4 @@ jobs:
         run: |
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
             --draft --verify-tag --title "$TAG" \
-            --notes "署名済みの devsb / release と更新用のアプリは tools/sign_release.py で追加する。確かめ方は README の「配布バイナリ」を参照。"
+            --notes "署名済みの devsb / release と更新用のアプリは tools/sign_release.py で追加する。確かめ方は docs/releases.md を参照。"

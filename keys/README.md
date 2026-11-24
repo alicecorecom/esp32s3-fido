@@ -10,5 +10,5 @@
 
 - 配布版の devsb を書いた基板は、初回起動でこの2本のダイジェストを eFuse の KEY1・KEY2 に焼き、以後この2本で署名したファームしか起動しない
 - 基板に焼かれた値は `espefuse summary`（devsb の間）の `BLOCK_KEY1` / `BLOCK_KEY2` で確かめられる
-- 配布物の署名の確かめ方は、トップの README の「配布バイナリ」を参照（`tools/verify_release.py`）
+- 配布物の署名の確かめ方は、[docs/releases.md](../docs/releases.md) を参照（`tools/verify_release.py`）
 - 自分の鍵を使いたい場合は、配布版の devsb / release を使わず、自分でビルドして `idf.ps1 devsb` で書く

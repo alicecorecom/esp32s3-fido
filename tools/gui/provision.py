@@ -238,7 +238,7 @@ def classify(st):
     if st["crypt_cnt"] == 0 and not st["sb"]:
         if all(p == 0 for p in st["purposes"]):
             return "新品", "devsb-new", "新品です。1回目の書き込み（B+）ができます"
-        return "A", None, "段階 A（暗号化なし）の基板です。この画面では扱いません（README の「ほかの書き込み方」）"
+        return "A", None, "段階 A（暗号化なし）の基板です。この画面では扱いません（docs/releases.md の「ほかの書き込み方」）"
     if st["crypt_cnt"] == 1 and fe_on and not st["sb"]:
         return "B", "devsb-b", "段階 B（開発モードの暗号化）です。B+ に進められます"
     if st["crypt_cnt"] == 1 and fe_on and st["sb"]:
