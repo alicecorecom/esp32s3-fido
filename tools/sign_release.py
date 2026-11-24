@@ -125,6 +125,8 @@ def main():
         content = dict(files)
         content.update(signed)
         content["encrypted_flash_args"] = FLASH_ARGS.encode()
+        # a new board: plaintext, the first boot enables Secure Boot and encryption
+        content["flash_args"] = FLASH_ARGS.replace(" --encrypt", "").encode()
         info = files.get("BUILDINFO.txt", b"").decode().rstrip("\n").split("\n")
         info += ["signed: Secure Boot V2, keys " + ", ".join(os.path.basename(p) for p in pubkeys)]
         info += [f"sha256 {hashlib.sha256(signed[n]).hexdigest()}  {n} (signed)" for n in verify_release.SIGNED_IMAGES]

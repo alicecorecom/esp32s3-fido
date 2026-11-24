@@ -727,10 +727,10 @@ index 7a910ac..d34d058 100644
      const int itf_desc_count = ITF_TOTAL < max_desc_slots ? ITF_TOTAL : max_desc_slots;
      for (int i = 0; i < itf_desc_count; i++) {
 diff --git a/src/otp/otp_esp32.c b/src/otp/otp_esp32.c
-index e75ade7..46f4327 100644
+index e75ade7..677ed2f 100644
 --- a/src/otp/otp_esp32.c
 +++ b/src/otp/otp_esp32.c
-@@ -27,8 +27,19 @@
+@@ -27,8 +27,20 @@
  #include "esp_efuse_table.h"
  #include "byte_array.h"
  
@@ -742,6 +742,7 @@ index e75ade7..46f4327 100644
 +#include "freertos/task.h"
 +#include "sdkconfig.h"
 +#include "esp_flash_encrypt.h"
++#include "esp_secure_boot.h"
 +#include "led/led.h"
 +
 +/* esp32s3-fido: the OTP keys are no longer stored in eFuse as readable USER blocks.
@@ -752,7 +753,7 @@ index e75ade7..46f4327 100644
  
  uint8_t _otp_key_1[32] = {0};
  uint8_t _otp_key_2[32] = {0};
-@@ -283,60 +294,62 @@ int otp_platform_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
+@@ -283,60 +295,84 @@ int otp_platform_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
      return PICOKEYS_OK;
  }
  
@@ -798,7 +799,11 @@ index e75ade7..46f4327 100644
 +        otp_fatal("block has wrong purpose", ESP_ERR_INVALID_STATE);
      }
 -    *otp_key_1_out = _otp_key_1;
--
++    if (!esp_efuse_get_key_dis_read(OTP_HMAC_BLOCK)) {
++        otp_fatal("block is not read-protected", ESP_ERR_INVALID_STATE);
++    }
++}
+ 
 -    if (esp_efuse_key_block_unused(OTP_KEY_2)) {
 -        mbedtls_ecdsa_context ecdsa;
 -        size_t olen = 0;
@@ -816,21 +821,28 @@ index e75ade7..46f4327 100644
 -        }
 -        mbedtls_platform_zeroize(pkey, sizeof(pkey));
 -        write_otp[1] = OTP_KEY_2;
-+    if (!esp_efuse_get_key_dis_read(OTP_HMAC_BLOCK)) {
-+        otp_fatal("block is not read-protected", ESP_ERR_INVALID_STATE);
++#ifdef CONFIG_SECURE_BOOT_V2_ALLOW_EFUSE_RD_DIS
++/* esp32s3-fido: on a new board, the first boot of a devsb / release bootloader
++ * enables Secure Boot and flash encryption, and would normally end by burning
++ * WR_DIS_RD_DIS, after which the app could not read-protect its HMAC key
++ * (otp_fatal, and a dead board in release). The devsb / release configs leave
++ * it open (SECURE_BOOT_V2_ALLOW_EFUSE_RD_DIS) and the app closes it here, right
++ * after the HMAC key is in place. Only signed code runs before this point. */
++static void otp_lock_read_protection(void) {
++    if (!esp_secure_boot_enabled() || esp_efuse_read_field_bit(ESP_EFUSE_WR_DIS_RD_DIS)) {
++        return;
      }
 -    ret = read_key_from_efuse(OTP_KEY_2, BYTE_ARRAY(_otp_key_2, sizeof(_otp_key_2)));
 -    if (ret != ESP_OK) {
 -        printf("Error reading OTP key 2 [%d]\n", ret);
-+}
-+
-+static void otp_hmac_derive(const char *label, uint8_t out[32]) {
-+    esp_err_t err = esp_hmac_calculate(OTP_HMAC_KEY_ID, label, strlen(label), out);
-+    if (err != ESP_OK) {
-+        otp_fatal("HMAC failed", err);
++    esp_err_t err = esp_efuse_write_field_bit(ESP_EFUSE_WR_DIS_RD_DIS);
++    if (err != ESP_OK || !esp_efuse_read_field_bit(ESP_EFUSE_WR_DIS_RD_DIS)) {
++        otp_fatal("WR_DIS_RD_DIS not burned", err);
      }
 -    *otp_key_2_out = _otp_key_2;
++    printf("eFuse: WR_DIS_RD_DIS burned (no more read-protected keys)\n");
 +}
++#endif
  
 -    for (size_t i = 0; i < sizeof(write_otp) / sizeof(write_otp[0]); i++) {
 -        if (write_otp[i] != 0xFFFF) {
@@ -843,6 +855,13 @@ index e75ade7..46f4327 100644
 -                printf("Error setting OTP key %d purpose to read only [%d]\n", i, ret);
 -            }
 -        }
++static void otp_hmac_derive(const char *label, uint8_t out[32]) {
++    esp_err_t err = esp_hmac_calculate(OTP_HMAC_KEY_ID, label, strlen(label), out);
++    if (err != ESP_OK) {
++        otp_fatal("HMAC failed", err);
++    }
++}
++
 +void otp_platform_init(const uint8_t **otp_key_1_out, const uint8_t **otp_key_2_out) {
 +    (void)read_key_from_efuse;
 +#ifdef CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE
@@ -857,6 +876,9 @@ index e75ade7..46f4327 100644
      }
 +#endif
 +    otp_hmac_provision();
++#ifdef CONFIG_SECURE_BOOT_V2_ALLOW_EFUSE_RD_DIS
++    otp_lock_read_protection();
++#endif
 +    otp_hmac_derive("pico-keys/otp_key_1", _otp_key_1);
 +    /* otp_key_2 is used as a secp256k1 private key (rescue.c); an HMAC output is
 +     * a valid scalar except with negligible probability (< 2^-127). */

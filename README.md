@@ -91,7 +91,7 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 ## 書き込み
 
 > [!CAUTION]
-> eFuse の書き込みとフラッシュ暗号化は **元に戻せません。** 必ず A → B → B+ → C の順に進め、
+> eFuse の書き込みとフラッシュ暗号化は **元に戻せません。** A → B → B+ → C の順に進め（新品の基板は[一発で B+](#新品の基板は一発で-b-から) から始められる）、
 > 各段階で「PIN 設定 → 登録 → **抜き差し** → ログイン」まで確認してから次へ進んでください。
 
 | 段階 | コマンド | 何が起きるか | 戻せるか |
@@ -105,7 +105,19 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 - 書き込んだあとは **基板の RST だけを押して** 起動する。USB 経由のリセットでは、手で入れたダウンロードモードから抜けられない
 - B の間は盗難対策にならない（他人が自分のファームを書き込み、HMAC 回路を使える。フラッシュを吸い出して書き戻せば PIN の失敗回数も戻せる）。大事なアカウントは C の後に登録する
 - C の後は、試験中の登録を消すため Windows の「セキュリティ キーのリセット」をする（親鍵も作り直される）
-- `idf.ps1 release` は、開発モードで暗号化済み **かつ** セキュアブートが有効な基板（B+ を通ったもの）にしか書かない。`$env:ESP32S3_FIDO_RELEASE_OK = 'yes'` と、devsb と同じ `$env:ESP32S3_FIDO_SB_VAULT` / `$env:ESP32S3_FIDO_SB_KEYS` が要る
+- `idf.ps1 release` は、開発モードで暗号化済み **かつ** セキュアブートが有効な基板（B+ を通ったもの）にしか書かない（新品の基板を除く。下記）。`$env:ESP32S3_FIDO_RELEASE_OK = 'yes'` と、devsb と同じ `$env:ESP32S3_FIDO_SB_VAULT` / `$env:ESP32S3_FIDO_SB_KEYS` が要る
+
+### 新品の基板は一発で B+ から
+
+v0.1.3 以降、何も書いていない新品の基板（暗号化もセキュアブートも無効、eFuse の鍵ブロックが全部空）には、A と B を飛ばして **B+ を1回書くだけ** で済む。
+
+1. 新品に devsb を書く（暗号化せずに書く。`idf.ps1 devsb` は新品を見分けて自動でそうする。配布版なら署名済み `devsb.zip` の `flash_args`）
+2. RST を押すと、最初の起動でブートローダがセキュアブートとフラッシュ暗号化（開発モード）を有効にし、フラッシュを暗号化する（十数秒）。続いてアプリが HMAC の鍵を焼き、最後に `WR_DIS_RD_DIS` を焼く
+3. PIN 設定 → 登録 → 抜き差し → ログインと、`led-check` を確かめる
+4. 問題がなければ、通常どおり C（release）を書く
+
+- 試験済み（5台目）：新品から一発で B+ にした基板の eFuse の保護の状態（鍵の読み取り禁止、`WR_DIS_RD_DIS`、鍵の失効）は、段階を踏んで B+ にした基板と同じになった
+- 仕組みとしては、新品に **release を直接**書くこともできる（最初の起動で release モードの暗号化と secure download mode まで進む）。ただし **この経路は実機で確かめていない**。失敗すると基板は二度と書き直せないので、確かめるまでは上の手順（一発で B+ → C）を使う
 - ブートローダには、ロールバック（更新したアプリが USB の接続まで行けなければ、次の起動で前の面に戻す）と巻き戻し防止（`config/sdkconfig.common` の `CONFIG_BOOTLOADER_APP_SECURE_VERSION` より古いアプリを起動しない）を入れてある。C の後はブートローダを変えられないので、この2つは C の前に入っている必要がある
 - `SECURE_VERSION` を上げるのは、古い版を使わせたくない脆弱性を直したときだけ。上げた版が起動すると eFuse に焼かれ、上げられるのは全部で16回
 
@@ -176,7 +188,11 @@ uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fid
 
 zip を展開したフォルダで実行する。段階の進め方と注意は[書き込み](#書き込み)と同じで、**各段階で抜き差し後のログインまで確かめてから次へ進む**。
 
+新品の基板なら、A・B を飛ばして devsb.zip から始められる（[一発で B+](#新品の基板は一発で-b-から)）。
+
 ```powershell
+# 新品の基板 → B+（devsb.zip の flash_args。暗号化せずに書く。初回起動で作者の鍵を eFuse に焼く。元に戻せない）
+uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@flash_args"
 # A. dev / B. devenc の初回
 uvx esptool --chip esp32s3 -p COMx write-flash "@flash_args"
 # B. devenc の2回目以降
@@ -188,8 +204,8 @@ uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_fla
 ```
 
 - 書き込み後に LED が光らないときは **基板の RST を押す**（USB 経由のリセットでは、ダウンロードモードから抜けないことがある）
-- **A の直後に [`led-check`](#led-の赤と緑が逆のとき) で LED の色の順番を合わせておく**。合っていないと、以後の確認で成功（緑）と失敗（赤）を取り違える
-- B+ と C の前に、`uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info` で基板の状態を確かめる。B+ の前は `SPI_BOOT_CRYPT_CNT` が `0x1` で `Secure Boot: Disabled`、C の前は `0x1` で `Secure Boot: Enabled` であること。`idf.ps1` はこれを自動で確かめるが、esptool は確かめない
+- **最初に起動したら（A の直後、または新品から B+ の直後）[`led-check`](#led-の赤と緑が逆のとき) で LED の色の順番を合わせておく**。合っていないと、以後の確認で成功（緑）と失敗（赤）を取り違える
+- B+ と C の前に、`uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info` で基板の状態を確かめる。新品から B+ の前は `SPI_BOOT_CRYPT_CNT` が `0x0`、`Secure Boot: Disabled`、`Key Purposes` が全部 0。B を通った基板の B+ の前は `0x1` で `Secure Boot: Disabled`、C の前は `0x1` で `Secure Boot: Enabled` であること。`idf.ps1` はこれを自動で確かめるが、esptool は確かめない
 - セキュアブートが有効な基板では、esptool はブートローダの領域に書くのを `--force` なしでは拒む（署名の合わないブートローダを書くと起動しなくなるため）。`--force` は、その基板に焼いた鍵で署名済みのものを書くときだけ付ける
 - B+ / C の後のアプリの更新は、USB 経由で行う（[ファームの更新](#ファームの更新usb-経由)）。B+ の基板には `app-sb.bin`、C の基板には `app-rel.bin` を送る。dev / devenc の基板には、それぞれの zip の `pico_fido.bin` を送る
 
@@ -438,6 +454,19 @@ FIDO2 の既定は4文字で、本家は authenticatorConfig（setMinPINLength�
 - 理由は[PIN は8桁以上にする](#pin-は8桁以上にする)を参照（フラッシュの書き戻しで失敗回数が戻る攻撃）
 - すでに設定してある短い PIN は使える（照合では長さを見ない）。セキュリティキーのリセット後も8文字
 - authenticatorConfig で8より長くはできる（短くはできない）
+
+</details>
+
+<details>
+<summary><b>14. WR_DIS_RD_DIS をアプリが焼く</b>（<code>src/otp/otp_esp32.c</code>、<code>config/sdkconfig.devsb</code> / <code>.release</code>）</summary>
+
+ESP-IDF のブートローダは、セキュアブートを有効にした最初の起動の最後に `WR_DIS_RD_DIS`（以後 eFuse を読み取り禁止にできなくする）を焼く。
+改造1の HMAC の鍵はアプリが最初の起動で読み取り禁止にして焼くので、新品の基板に devsb / release を直接書くと、アプリの番にはもう読み取り禁止にできず、止まってしまう（release なら二度と書き直せない）。
+
+- devsb / release では `CONFIG_SECURE_BOOT_V2_ALLOW_EFUSE_RD_DIS=y` にして、ブートローダには焼かせない（起動ログに「Allowing read disabling of additional efuses - SECURITY COMPROMISED」と出るのはこのため）
+- アプリは HMAC の鍵を焼いて読み取り禁止を確かめた直後に、セキュアブートが有効なら `WR_DIS_RD_DIS` を焼く。毎回の起動で確かめ、焼いてあれば何もしない
+- 窓が開いているのは新品の最初の起動の間だけで、その間に動くのは署名済みのブートローダとアプリだけ
+- 段階を踏んで B+ にした基板（B+ の時点で古いブートローダが焼いた）とも、最終的な eFuse の状態は同じ
 
 </details>
 

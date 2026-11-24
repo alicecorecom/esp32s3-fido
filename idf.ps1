@@ -85,6 +85,11 @@ $idfPy = @("$IdfPath\tools\idf.py", '-C', $proj, '-B', $build,
 #   release: board in DEVELOPMENT flash encryption with Secure Boot enabled
 #            (it passed devsb). The first boot switches to RELEASE mode and
 #            secure download mode: needs $env:ESP32S3_FIDO_RELEASE_OK = "yes".
+#   A new board (no flash encryption, no Secure Boot, every eFuse key block
+#   empty) also takes devsb or release in one go: the images are written in
+#   plaintext and the first boot enables Secure Boot and flash encryption,
+#   then the app provisions its HMAC key and burns WR_DIS_RD_DIS. Same
+#   confirmations as above.
 # Each confirmation is consumed by one run.
 $flashActions = $IdfArgs | Where-Object { $_ -match 'flash$' }
 if ($Profile -in @('devsb', 'release') -and $flashActions) {
@@ -101,12 +106,17 @@ if ($Profile -in @('devsb', 'release') -and $flashActions) {
     $ErrorActionPreference = 'Continue'
     $info = & $py.FullName -m esptool --chip esp32s3 -p $port --after no_reset --no-stub get_security_info 2>&1 | Out-String
     $ErrorActionPreference = 'Stop'
-    if ($info -notmatch 'SPI_BOOT_CRYPT_CNT\)\s*:\s*0x1\b') {
-        Write-Host $info
-        throw "${Profile}: board is not in DEVELOPMENT flash encryption (devenc). Refusing."
-    }
     $sbEnabled = $info -match 'Secure Boot:\s*Enabled'
-    if ($Profile -eq 'release' -and -not $sbEnabled) {
+    $fresh = $info -match 'SPI_BOOT_CRYPT_CNT\)\s*:\s*0x0\b' -and -not $sbEnabled -and
+        $info -match 'Key Purposes:\s*\(0, 0, 0, 0, 0, 0,'
+    if ($fresh) {
+        Write-Host "${Profile}: new board (no encryption, no Secure Boot, empty key blocks): writing in plaintext, the first boot sets it up"
+    }
+    elseif ($info -notmatch 'SPI_BOOT_CRYPT_CNT\)\s*:\s*0x1\b') {
+        Write-Host $info
+        throw "${Profile}: board is neither new nor in DEVELOPMENT flash encryption (devenc). Refusing."
+    }
+    if ($Profile -eq 'release' -and -not $sbEnabled -and -not $fresh) {
         Write-Host $info
         throw 'release: Secure Boot is not enabled on this board. Go through devsb first. Refusing.'
     }
@@ -165,12 +175,15 @@ if ($Profile -in @('devsb', 'release') -and $flashActions) {
     $lines | Set-Content -Encoding ascii (Join-Path $build 'signed_flash_args')
 
     Remove-Item Env:ESP32S3_FIDO_SB_OK, Env:ESP32S3_FIDO_RELEASE_OK -ErrorAction SilentlyContinue
+    # A new board has no flash encryption yet: plaintext, the bootloader
+    # encrypts in place on the first boot. Otherwise the chip encrypts now.
+    $encrypt = if ($fresh) { @() } else { @('--encrypt') }
     Push-Location $build
     try {
         $ErrorActionPreference = 'Continue'
         # Secure Boot builds select ESPTOOLPY_NO_STUB; do the same here.
         & $py.FullName -m esptool --chip esp32s3 -p $port -b 460800 --before default_reset --after no_reset --no-stub `
-            write_flash @force --encrypt '@signed_flash_args'
+            write_flash @force @encrypt '@signed_flash_args'
         exit $LASTEXITCODE
     } finally { Pop-Location }
 }
