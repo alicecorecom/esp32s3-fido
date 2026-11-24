@@ -221,7 +221,7 @@ Chrome はこれを見て、挿すたびに「Pico Key detected」の通知を�
 改造版は、ESP チップ搭載機器に無償で PID を割り当てている [Espressif の VID 0x303A](https://github.com/espressif/usb-pids) を使う。
 
 - VID/PID は `idf.ps1` の `$UsbVid` / `$UsbPid` で指定する（`-D USB_VID=… -D USB_PID=…` で CMake に渡す）
-- 現在の PID 0x8000 は Espressif のテスト用 PID で、専用の PID が割り当てられるまでの仮の値
+- PID 0x83F8 は Espressif から割り当てを受けたこのプロジェクト専用の番号（[espressif/usb-pids#473](https://github.com/espressif/usb-pids/issues/473)）
 - メーカー名・製品名は `ESP32S3_FIDO_USB_MANUFACTURER` / `ESP32S3_FIDO_USB_PRODUCT` で変えられる
 - 認証器としての動作は VID/PID に依存しない（OS は HID の FIDO 用途ページで見分ける）。変えても登録は消えない
 

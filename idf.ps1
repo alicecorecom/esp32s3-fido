@@ -35,10 +35,10 @@ if (-not $py) { throw "ESP-IDF python env not found under $ToolsPath" }
 $env:IDF_PATH = $env:IDF_PATH -replace '\\', '/'
 
 # USB VID/PID. 0x303A = Espressif's VID, free PIDs for ESP chips via
-# https://github.com/espressif/usb-pids. 0x8000 is Espressif's test PID:
-# temporary until our own PID is allocated.
+# https://github.com/espressif/usb-pids. 0x83F8 is allocated to this project
+# (espressif/usb-pids issue #473).
 $UsbVid = '0x303A'
-$UsbPid = '0x8000'
+$UsbPid = '0x83F8'
 
 $root = $PSScriptRoot
 $proj = Join-Path $root 'pico-fido'
