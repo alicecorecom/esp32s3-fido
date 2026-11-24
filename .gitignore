@@ -1,3 +1,6 @@
 build/
 *.log
 NOTES.md
+dist/
+dist-signed/
+__pycache__/

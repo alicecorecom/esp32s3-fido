@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Builds dev / devenc / release, checks that no radio code is linked, and
-# attests the zips (gh attestation verify <zip> --repo alicecorecom/esp32s3-fido).
-# A v* tag also creates a draft GitHub Release with the zips.
+# Builds dev / devenc / devsb / release, checks that no radio code is linked,
+# and attests the zips (gh attestation verify <zip> --repo alicecorecom/esp32s3-fido).
+# A v* tag also creates a draft GitHub Release with the zips. devsb and release
+# are Secure Boot builds and come out unsigned: tools/sign_release.py verifies
+# them, signs them with the keys in 1Password and adds the signed zips.
 name: build
 
 on:
@@ -28,6 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          fetch-depth: 0          # tags for the app version (git describe)
           persist-credentials: false
 
       - name: Apply patches
@@ -40,7 +43,7 @@ jobs:
       - name: Build
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
-          for p in dev devenc release; do sh ci/build.sh "$p"; done
+          for p in dev devenc devsb release; do sh ci/build.sh "$p"; done
 
       - name: Check that no radio code is linked
         run: |
@@ -92,4 +95,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
-            --draft --verify-tag --title "$TAG" --notes "SHA-256 は SHA256SUMS を参照。確かめ方は README の「配布バイナリ」を参照。"
+            --draft --verify-tag --title "$TAG" \
+            --notes "署名済みの devsb / release と更新用のアプリは tools/sign_release.py で追加する。確かめ方は README の「配布バイナリ」を参照。"

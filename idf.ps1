@@ -56,8 +56,21 @@ if (Test-Path $sdkconfig) {
     }
 }
 
+# App version (esp_app_desc_t.version, shown by tools\fwupdate.py info): this
+# repository's describe, not the pico-fido submodule's. "-dirty" ignores the
+# submodule, which always carries the applied patches.
+$ErrorActionPreference = 'Continue'
+$appVer = (& git -C $root describe --tags --always 2>$null | Select-Object -First 1)
+if (-not $appVer) { $appVer = 'unknown' }
+elseif (& git -C $root status --porcelain --ignore-submodules=all --untracked-files=no 2>$null) { $appVer += '-dirty' }
+$ErrorActionPreference = 'Stop'
+# Profile tag: fwupdate.py only sends an image whose tag matches the key's
+# state (a +rel app switches a board to RELEASE on its first boot).
+$appVer += @{ dev = '+dev'; devenc = '+enc'; devsb = '+sb'; release = '+rel' }[$Profile]
+
 $idfPy = @("$IdfPath\tools\idf.py", '-C', $proj, '-B', $build,
-    '-D', "SDKCONFIG=$build\sdkconfig", '-D', "SDKCONFIG_DEFAULTS=$defaults")
+    '-D', "SDKCONFIG=$build\sdkconfig", '-D', "SDKCONFIG_DEFAULTS=$defaults",
+    '-D', "PROJECT_VER=$appVer")
 
 # devsb and release: Secure Boot V2 boards. Only `-p COMx encrypted-flash`.
 # Checks the board, builds, signs the bootloader and the app with every key in

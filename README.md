@@ -142,12 +142,18 @@ ESP-IDF が無くても、esptool だけで書き込める。
 |---|---|
 | `esp32s3-fido-<版>-dev.zip` | 段階 A 用 |
 | `esp32s3-fido-<版>-devenc.zip` | 段階 B 用 |
-| `esp32s3-fido-<版>-release.zip` | 段階 C 用の**署名なし**のイメージ。セキュアブートの基板では起動しないので、そのままでは使えない（署名付きの配布は準備中） |
-| `SHA256SUMS` | 各 zip の SHA-256 |
+| `esp32s3-fido-<版>-devsb.zip` | 段階 B+ 用。作者の鍵（[`keys/`](keys/)）で署名済み |
+| `esp32s3-fido-<版>-release.zip` | 段階 C 用。作者の鍵で署名済み |
+| `esp32s3-fido-<版>-app-sb.bin` / `-app-rel.bin` | USB 更新用の署名済みアプリ（B+ / C の基板用） |
+| `esp32s3-fido-<版>-devsb-unsigned.zip` / `-release-unsigned.zip` | Actions がビルドしたままの署名なしのもの。署名済みのものを確かめるための元 |
+| `SHA256SUMS` | 各ファイルの SHA-256 |
+
+- 各 zip の `BUILDINFO.txt` に、アプリの版・巻き戻し防止の版番号・ELF SHA-256 と、各イメージの SHA-256 を書いてある。キーに入っているものは `tools/fwupdate.py info` の ELF SHA-256 と照らし合わせられる
+- **配布版の B+ を書いた基板は、作者の鍵で署名したファームしか起動しなくなる**（初回起動で `keys/` の2本の鍵を eFuse に焼く。元に戻せない）。自分の鍵を使いたい場合は、配布版の B+ / C を使わず、自分でビルドして `idf.ps1 devsb` で書く
 
 ### 本物か確かめる
 
-各 zip には、このリポジトリの Actions でビルドしたことの証明（[artifact attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)）が付いている。
+Actions がビルドした zip（dev / devenc / `*-unsigned`）には、このリポジトリの Actions でビルドしたことの証明（[artifact attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)）が付いている。
 [GitHub CLI](https://cli.github.com/) で確かめられる。
 
 ```powershell
@@ -156,18 +162,40 @@ gh attestation verify esp32s3-fido-<版>-devenc.zip --repo alicecorecom/esp32s3-
 
 `Verification succeeded!` と出て、ビルドしたコミットとワークフローが表示されれば本物。
 
+署名済みのもの（devsb / release の zip と app）は、作者が手元で署名を足したもので、Actions の証明は付いていない。
+代わりに `tools/verify_release.py` で、**Actions がビルドしたもの（`*-unsigned.zip`）に署名のセクタを足しただけ**であることと、`keys/` の2本の鍵で署名されていることを確かめられる（GitHub CLI があれば `*-unsigned.zip` の証明も一緒に確かめる）。
+
+```powershell
+uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fido-<版>-devsb.zip esp32s3-fido-<版>-devsb-unsigned.zip
+uv run --no-project --with esptool python -I tools\verify_release.py esp32s3-fido-<版>-app-sb.bin esp32s3-fido-<版>-devsb-unsigned.zip
+```
+
+最後に `OK` と出れば本物。
+
 ### 書き込む
 
-zip を展開したフォルダで実行する。段階の進め方と注意は[書き込み](#書き込み)と同じ。
+zip を展開したフォルダで実行する。段階の進め方と注意は[書き込み](#書き込み)と同じで、**各段階で抜き差し後のログインまで確かめてから次へ進む**。
 
 ```powershell
 # A. dev / B. devenc の初回
 uvx esptool --chip esp32s3 -p COMx write-flash "@flash_args"
 # B. devenc の2回目以降
 uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
+# B+. devsb（B を通った基板に。初回起動で作者の鍵を eFuse に焼く。元に戻せない）
+uvx esptool --chip esp32s3 -p COMx --no-stub write-flash "@encrypted_flash_args"
+# C. release（B+ を通った基板に。元に戻せない）
+uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_flash_args"
 ```
 
-- B+（devsb）と C（release）は、自分の鍵での署名が要るので、配布バイナリではなく自分でビルドして `idf.ps1` で書く
+- B+ と C の前に、`uvx esptool --chip esp32s3 -p COMx --no-stub get-security-info` で基板の状態を確かめる。B+ の前は `SPI_BOOT_CRYPT_CNT` が `0x1` で `Secure Boot: Disabled`、C の前は `0x1` で `Secure Boot: Enabled` であること。`idf.ps1` はこれを自動で確かめるが、esptool は確かめない
+- セキュアブートが有効な基板では、esptool はブートローダの領域に書くのを `--force` なしでは拒む（署名の合わないブートローダを書くと起動しなくなるため）。`--force` は、その基板に焼いた鍵で署名済みのものを書くときだけ付ける
+- B+ / C の後のアプリの更新は、USB 経由で行う（[ファームの更新](#ファームの更新usb-経由)）。B+ の基板には `app-sb.bin`、C の基板には `app-rel.bin` を送る。dev / devenc の基板には、それぞれの zip の `pico_fido.bin` を送る
+
+### 配布物の作り方（作者向け）
+
+1. `v*` のタグを push すると、Actions が4つのプロファイルをビルドし、証明を付けて Release の下書きを作る
+2. 手元で `tools/sign_release.py --tag <タグ> --upload` を実行する。下書きの `*-unsigned.zip` の証明を確かめ、1Password の鍵で署名し、`verify_release.py` と同じ確認を通してから、署名済みの zip と app を下書きに足す
+3. 下書きの中身を確かめてから公開する
 
 ## 使い方
 
@@ -207,7 +235,9 @@ uv run --no-project --with pyscard python -I tools\fwupdate.py update build\devs
 - `update` を始めると LED が青く点滅するので、BOOT かタッチで本人確認する。そのあと、今使っていない方の面（ota_0 / ota_1）に書き込む（約 720KB で30秒ほど）
 - 書き終わるとキー自身がイメージを検証する。セキュアブートの基板では **登録した鍵の署名と、巻き戻し防止の版番号も確かめ、合わなければ受け付けない**（ツール側の検査を飛ばしても同じ）
 - 受け付けたら次の起動先をその面にして再起動する。新しいファームは「確認待ち」で起動し、USB がつながると自分を「正常」と記録する。記録しないまま再起動すると、ブートローダが前の面に戻す
-- 送るのはアプリ（`pico_fido.bin`）だけ。セキュアブートの基板には署名済みのもの（`idf.ps1 devsb` / `release` の書き込みで `build\<profile>\signed\` にできる）を送る。ブートローダやパーティション表は更新できない
+- 送るのはアプリ（`pico_fido.bin`）だけ。セキュアブートの基板には署名済みのもの（配布版の `app-sb.bin` / `app-rel.bin`、自分でビルドしたものは `idf.ps1 devsb` / `release` の書き込みで `build\<profile>\signed\` にできる）を送る。ブートローダやパーティション表は更新できない
+- アプリの版の末尾には、ビルドしたプロファイルの印（`+dev` / `+enc` / `+sb` / `+rel`）が付いている。`fwupdate.py` はキーの状態に合わない印のイメージを送らない（**`+rel` のアプリは起動すると基板を release に切り替えるので、B+ の基板に誤って送ると戻せない**）。巻き戻し防止の版番号がキーより古いイメージも送らない
+- `fwupdate.py image <ファイル>` で、キーをつながずにイメージの版・版番号・ELF SHA-256・署名の有無を確かめられる
 - データ領域（part0）には触れないので、登録済みのパスキーはそのまま残る
 
 ## 改造の詳細
@@ -428,7 +458,7 @@ esptool --chip esp32s3 --port COMx write-flash --encrypt 0x20000 build\touchprob
 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）。
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos、AGPL-3.0-only。`patches/` の改造はその派生物で、同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`keys/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/sign_release.py`、`tools/verify_release.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスに従う
 
 ファームを書き込んだキーを人に渡す場合は、対応するソース（このリポジトリと、ビルドに使ったコミット）を入手できるようにしてください。

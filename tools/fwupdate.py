@@ -5,6 +5,7 @@
     uv run --no-project --with pyscard python -I tools/fwupdate.py info
     uv run --no-project --with pyscard python -I tools/fwupdate.py update build/devsb/signed/pico_fido.bin
     uv run --no-project --with pyscard python -I tools/fwupdate.py reboot
+    uv run --no-project --with pyscard python -I tools/fwupdate.py image pico_fido.bin   # no key needed
 
 `update` writes the image into the other OTA slot (press BOOT or touch the
 pad when the LED blinks blue), lets the key check it (signature and secure
@@ -98,7 +99,28 @@ def print_info(i):
         print("update in progress")
 
 
-def check_image(img, i):
+def image_desc(img):
+    """esp_app_desc_t at the start of the first segment (after the 24-byte
+    image header and the 8-byte segment header)."""
+    d = img[0x20:0x20 + 256]
+    if len(d) < 176 or struct.unpack("<I", d[0:4])[0] != 0xABCD5432:
+        raise KeyError_("no app description in the image (not an ESP-IDF app?)")
+    s = lambda o, n: d[o:o + n].split(b"\0")[0].decode(errors="replace")
+    return {"secure_version": struct.unpack("<I", d[4:8])[0], "version": s(16, 32),
+            "project": s(48, 32), "elf_sha256": d[144:176].hex()}
+
+
+def key_profile(i):
+    """The image profile tag (idf.ps1 / ci/build.sh) that fits the key's state."""
+    f = i["flags"]
+    if f & 4:
+        return "rel"
+    if f & 2:
+        return "sb" if f & 1 else "enc"
+    return "dev"
+
+
+def check_image(img, i, d):
     if len(img) < 0x1000 or img[0] != 0xE9:
         raise KeyError_("not an ESP app image (magic 0xE9 missing)")
     if len(img) > i["slot_size"]:
@@ -107,15 +129,24 @@ def check_image(img, i):
         # Secure Boot V2 signature sector: last 4 KB, first block starts with 0xE7
         if len(img) % 0x1000 or img[-0x1000] != 0xE7:
             raise KeyError_("the key has Secure Boot on, but the image is not signed")
+    want = key_profile(i)
+    got = d["version"].rpartition("+")[2] if "+" in d["version"] else None
+    if got != want:
+        # e.g. a +rel app switches a devsb board to RELEASE on its first boot
+        raise KeyError_(f"image is for '+{got}' keys, this key needs '+{want}' (version {d['version']!r})")
+    if d["secure_version"] < i["efuse_secure_version"]:
+        raise KeyError_(f"image secure version {d['secure_version']} is below the key's {i['efuse_secure_version']}")
 
 
 def update(c, path, reboot, local_check=True):
     img = open(path, "rb").read()
     i = info(c)
     print_info(i)
-    if local_check:
-        check_image(img, i)
+    d = image_desc(img) if len(img) > 0x120 else {"version": "?", "secure_version": 0, "project": "?", "elf_sha256": "?"}
     print(f"\nimage: {path} ({len(img)} bytes)")
+    print(f"  {d['project']} {d['version']}, secure version {d['secure_version']}, ELF SHA-256 {d['elf_sha256']}")
+    if local_check:
+        check_image(img, i, d)
     print("press BOOT or touch the pad (LED blinks blue) ...")
     cmd(c, 0x10, struct.pack(">I", len(img)))
     t0 = time.time()
@@ -149,8 +180,19 @@ def main():
     u.add_argument("--no-reboot", action="store_true")
     u.add_argument("--skip-local-check", action="store_true", help=argparse.SUPPRESS)  # tests the key's own checks
     sub.add_parser("reboot")
+    im = sub.add_parser("image", help="show the app description of an image file (no key needed)")
+    im.add_argument("image")
     a = ap.parse_args()
     try:
+        if a.action == "image":
+            img = open(a.image, "rb").read()
+            d = image_desc(img)
+            signed = len(img) % 0x1000 == 0 and img[-0x1000] == 0xE7
+            print(f"firmware       : {d['project']} {d['version']}")
+            print(f"secure version : {d['secure_version']}")
+            print(f"ELF SHA-256    : {d['elf_sha256']}")
+            print(f"signed (SB V2) : {'yes' if signed else 'no'}")
+            return
         c = find_key(a.reader)
         if a.action == "info":
             print_info(info(c))
