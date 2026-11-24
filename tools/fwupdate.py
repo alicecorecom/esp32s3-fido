@@ -195,7 +195,10 @@ def ask_colour(c, colour):
         _, sw1, sw2 = c.transmit([0x80, 0x21, colour + 1, 0x00])
         if (sw1, sw2) == (0x6D, 0x00):
             raise KeyError_("this firmware has no LED test (v0.1.2 or later); use led-order")
-        a = input("  the LED blinks 3 times. What colour? [r]ed / [g]reen / [b]lue / [a]gain: ").strip().lower()[:1]
+        raw = input("  the LED blinks 3 times. What colour? [r]ed / [g]reen / [b]lue / [a]gain: ").lower()
+        # first answer letter; ignores a BOM or stray characters, accepts 赤 / 緑 / 青
+        raw = raw.replace("赤", "r").replace("緑", "g").replace("青", "b")
+        a = next((ch for ch in raw if ch in "rgba"), "")
         if a in ("r", "g", "b"):
             return "rgb".index(a)
 
