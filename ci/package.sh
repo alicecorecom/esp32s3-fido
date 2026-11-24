@@ -18,9 +18,12 @@ for profile in dev devenc release; do
     cp "$b/bootloader/bootloader.bin" "$d/bootloader/"
     cp "$b/partition_table/partition-table.bin" "$d/partition_table/"
     cp "$b/pico_fido.bin" "$b/flash_args" "$d/"
-    if [ "$profile" != dev ]; then
-        cp "$b/encrypted_flash_args" "$d/"
-    fi
+    case $profile in
+        devenc) cp "$b/encrypted_flash_args" "$d/" ;;
+        # ESP-IDF makes no encrypted_flash_args for a RELEASE-mode build; the
+        # images go onto a devenc board with --encrypt, same as for devenc.
+        release) sed '1s/$/ --encrypt/' "$b/flash_args" > "$d/encrypted_flash_args" ;;
+    esac
     (cd "$dist" && cmake -E tar cf "$name.zip" --format=zip "$name")
     rm -rf "$d"
 done

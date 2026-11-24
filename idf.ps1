@@ -54,21 +54,27 @@ if (Test-Path $sdkconfig) {
     }
 }
 
-# Release writes are irreversible. Only allow `encrypted-flash` onto a board that
-# is in DEVELOPMENT flash encryption (SPI_BOOT_CRYPT_CNT = 0x1, i.e. it passed the
-# devenc stage), and only with an explicit confirmation in the environment.
+$idfPy = @("$IdfPath\tools\idf.py", '-C', $proj, '-B', $build,
+    '-D', "SDKCONFIG=$build\sdkconfig", '-D', "SDKCONFIG_DEFAULTS=$defaults")
+
+# Release writes are irreversible. Only `-p COMx encrypted-flash`, only onto a
+# board that is in DEVELOPMENT flash encryption (SPI_BOOT_CRYPT_CNT = 0x1, i.e.
+# it passed the devenc stage), and only with an explicit confirmation in the
+# environment. ESP-IDF has no encrypted-flash target for a RELEASE-mode build,
+# so the images are written with esptool's --encrypt (the chip encrypts them
+# with its own key, as `encrypted-flash` does for devenc).
 $flashActions = $IdfArgs | Where-Object { $_ -match 'flash$' }
 if ($Profile -eq 'release' -and $flashActions) {
-    if ($flashActions | Where-Object { $_ -ne 'encrypted-flash' }) {
-        throw "release: only 'encrypted-flash' is allowed (got: $($flashActions -join ', '))"
+    if ($IdfArgs.Count -ne 3 -or $IdfArgs[0] -ne '-p' -or $IdfArgs[2] -ne 'encrypted-flash') {
+        throw 'release: usage is .\idf.ps1 release -p COMx encrypted-flash'
     }
     if ($env:ESP32S3_FIDO_RELEASE_OK -ne 'yes') {
         throw 'release: irreversible. Set $env:ESP32S3_FIDO_RELEASE_OK = "yes" to confirm.'
     }
-    $i = [array]::IndexOf($IdfArgs, '-p')
-    if ($i -lt 0 -or $i + 1 -ge $IdfArgs.Count) { throw 'release: pass the port with -p COMx' }
-    $port = $IdfArgs[$i + 1]
+    $port = $IdfArgs[1]
     $ErrorActionPreference = 'Continue'
+    & $py.FullName @idfPy build
+    if ($LASTEXITCODE -ne 0) { throw 'release: build failed' }
     $info = & $py.FullName -m esptool --chip esp32s3 -p $port --after no_reset get_security_info 2>&1 | Out-String
     $ErrorActionPreference = 'Stop'
     if ($info -notmatch 'SPI_BOOT_CRYPT_CNT\)\s*:\s*0x1\b') {
@@ -76,10 +82,16 @@ if ($Profile -eq 'release' -and $flashActions) {
         throw 'release: board is not in DEVELOPMENT flash encryption (devenc). Refusing.'
     }
     Remove-Item Env:ESP32S3_FIDO_RELEASE_OK   # one confirmation per run
+    Push-Location $build   # flash_args holds paths relative to the build directory
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $py.FullName -m esptool --chip esp32s3 -p $port -b 460800 --before default_reset --after no_reset `
+            write_flash --encrypt '@flash_args'
+        exit $LASTEXITCODE
+    } finally { Pop-Location }
 }
 
 # idf.py/CMake print progress on stderr; do not treat that as a PowerShell error.
 $ErrorActionPreference = 'Continue'
-& $py.FullName "$IdfPath\tools\idf.py" -C $proj -B $build `
-    -D "SDKCONFIG=$build\sdkconfig" -D "SDKCONFIG_DEFAULTS=$defaults" @IdfArgs
+& $py.FullName @idfPy @IdfArgs
 exit $LASTEXITCODE
