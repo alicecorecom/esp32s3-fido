@@ -6,6 +6,7 @@
     uv run --no-project --with pyscard python -I tools/fwupdate.py update build/devsb/signed/pico_fido.bin
     uv run --no-project --with pyscard python -I tools/fwupdate.py reboot
     uv run --no-project --with pyscard python -I tools/fwupdate.py image pico_fido.bin   # no key needed
+    uv run --no-project --with pyscard python -I tools/fwupdate.py led-order rgb         # LED colour order
 
 `update` writes the image into the other OTA slot (press BOOT or touch the
 pad when the LED blinks blue), lets the key check it (signature and secure
@@ -21,6 +22,7 @@ import time
 from smartcard.System import readers
 
 AID = [0xF0] + list(b"espfido")
+LED_ORDERS = ["rgb", "rbg", "grb", "gbr", "brg", "bgr"]   # PHY_LED_ORDER_* 0..5
 CHUNK = 240                     # short APDUs: data <= 255 bytes incl. the 4-byte offset
 STATES = {0: "new", 1: "pending verify", 2: "valid", 3: "invalid", 4: "aborted", 0xFFFFFFFF: "undefined", 0xFF: "unknown"}
 SW_TEXT = {
@@ -84,6 +86,7 @@ def info(c):
         "app_secure_version": app_sv, "efuse_secure_version": efuse_sv, "slot_size": slot_size,
         "version": s(16, 32), "project": s(48, 32), "date": s(80, 16), "time": s(96, 16),
         "idf": s(112, 32), "elf_sha256": b[144:176].hex(),
+        "led_order": b[176] if len(b) > 176 else None,   # older firmware: not reported
     }
 
 
@@ -95,6 +98,9 @@ def print_info(i):
     print(f"secure version   : app {i['app_secure_version']}, eFuse {i['efuse_secure_version']}")
     print(f"secure boot      : {'on' if f & 1 else 'off'}")
     print(f"flash encryption : {('release' if f & 4 else 'development') if f & 2 else 'off'}")
+    if i["led_order"] is not None:
+        lo = i["led_order"]
+        print(f"LED order        : {'default (grb)' if lo == 0xFF else LED_ORDERS[lo] if lo < 6 else lo}")
     if f & 8:
         print("update in progress")
 
@@ -180,6 +186,9 @@ def main():
     u.add_argument("--no-reboot", action="store_true")
     u.add_argument("--skip-local-check", action="store_true", help=argparse.SUPPRESS)  # tests the key's own checks
     sub.add_parser("reboot")
+    lo = sub.add_parser("led-order", help="set the LED colour order (press BOOT / touch)")
+    lo.add_argument("order", choices=LED_ORDERS + ["default"],
+                    help="grb (default) for boards whose red and green come out swapped with rgb; rgb for a standard WS2812")
     im = sub.add_parser("image", help="show the app description of an image file (no key needed)")
     im.add_argument("image")
     a = ap.parse_args()
@@ -196,6 +205,16 @@ def main():
         c = find_key(a.reader)
         if a.action == "info":
             print_info(info(c))
+        elif a.action == "led-order":
+            p1 = 0xFF if a.order == "default" else LED_ORDERS.index(a.order)
+            print("press BOOT or touch the pad (LED blinks blue) ...")
+            resp, sw1, sw2 = c.transmit([0x80, 0x20, p1, 0x00])
+            sw = (sw1 << 8) | sw2
+            if sw == 0x6D00:
+                raise KeyError_("this firmware has no LED order setting (v0.1.1 or later)")
+            if sw != 0x9000:
+                raise KeyError_(f"LED order: SW {sw:04X} {SW_TEXT.get(sw, '')}".rstrip())
+            print(f"LED order set to {a.order}")
         elif a.action == "update":
             update(c, a.image, not a.no_reboot, not a.skip_local_check)
         else:

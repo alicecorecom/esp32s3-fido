@@ -212,6 +212,18 @@ uvx esptool --chip esp32s3 -p COMx --no-stub write-flash --force "@encrypted_fla
 | 赤で速く点滅 | 起動時の致命的エラー（eFuse の鍵・データ領域）。起動を止めている |
 | 挿しても何も光らない | アプリが起動していない（セキュアブートの署名の拒否、ファームの破損など）。LED はアプリが光らせるので、その手前のブートローダで止まると光らない。COM ポートの起動ログで理由がわかる |
 
+### LED の赤と緑が逆のとき
+
+SuperMini に載っている LED は、個体によって色の順番が違う。**本人確認に成功すると赤、時間切れで緑**に見えたら、色の順番を変える（v0.1.1 以降）。
+
+```powershell
+uv run --no-project --with pyscard python -I tools\fwupdate.py led-order rgb       # 標準の WS2812（赤と緑が逆に見えた基板）
+uv run --no-project --with pyscard python -I tools\fwupdate.py led-order default   # 既定（grb）に戻す
+```
+
+- BOOT かタッチでの本人確認が要る。設定はデータ領域に残り、ファームを更新しても消えない
+- 既定の `grb` は、赤と緑を入れ替えて送る（作者の1〜3台目の LED がこの型）。`info` で今の設定がわかる
+
 ### PIN は8桁以上にする
 
 PIN は **8桁以上**（英字や記号も混ぜられる。最大63バイト）にする。キーは間違いを8回で締め出すが、それだけに頼れないため。
@@ -391,6 +403,7 @@ APDU で更新イメージを受け取るアプレット（AID `F0 65 73 70 66 6
 | 11 | WRITE | 位置＋データ。先頭から順番に書く（位置が飛んだら中止） |
 | 12 | END | `esp_ota_end()` でイメージを検証（セキュアブートなら署名も）し、次の起動先にする |
 | 13 / 14 | ABORT / REBOOT | 中止 / 応答を返してから再起動 |
+| 20 | LED ORDER | LED の色の順番（P1 = `PHY_LED_ORDER_*`、0xFF で既定）。**本人確認が必須**。PHY データのこの項目だけを書く（以前は rescue アプレットの役目） |
 
 - 書き込みは `esp_ota_begin(…, OTA_WITH_SEQUENTIAL_WRITES)` で、書くそばから消去する（1MB を一度に消すと命令が長く止まるため）
 - 別のアプレットが選ばれたら、書きかけのイメージは捨てる

@@ -246,10 +246,10 @@ index 5ac7185..4e5c794 100644
      FLASH_SIZE_BYTES = part0->size;
 diff --git a/src/fw_update.c b/src/fw_update.c
 new file mode 100644
-index 0000000..1cbea7a
+index 0000000..cad1233
 --- /dev/null
 +++ b/src/fw_update.c
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,294 @@
 +/*
 + * esp32s3-fido: firmware update over USB (CCID / WCID APDUs).
 + * Copyright (c) 2026 Alice Core
@@ -270,6 +270,9 @@ index 0000000..1cbea7a
 + *   INS 0x12 END     checks the image, sets it as the next boot slot.
 + *   INS 0x13 ABORT
 + *   INS 0x14 REBOOT  restarts after the response has been sent.
++ *   INS 0x20 LED ORDER  P1 = PHY_LED_ORDER_* (0..5), or 0xFF for the
++ *                     firmware default. Asks for presence.
++ *                     Stored in the PHY data (part0), so it survives updates.
 + */
 +#ifdef ESP_PLATFORM
 +
@@ -277,6 +280,7 @@ index 0000000..1cbea7a
 +#include "apdu.h"
 +#include "button.h"
 +#include "usb.h"
++#include "phy.h"
 +#include "esp_ota_ops.h"
 +#include "esp_app_desc.h"
 +#include "esp_efuse.h"
@@ -340,6 +344,7 @@ index 0000000..1cbea7a
 + *   16  build date, 16 build time
 + *   32  ESP-IDF version
 + *   32  ELF SHA-256 of the running app
++ *   u8  LED colour order (PHY_LED_ORDER_*, 0xFF = firmware default)
 + */
 +static int fw_update_info(void) {
 +    const esp_partition_t *run = esp_ota_get_running_partition();
@@ -374,6 +379,7 @@ index 0000000..1cbea7a
 +    put_str(d->idf_ver, 32);
 +    memcpy(res_APDU + res_APDU_size, d->app_elf_sha256, 32);
 +    res_APDU_size += 32;
++    res_APDU[res_APDU_size++] = phy_data.led_order_present ? phy_data.led_order : 0xFF;
 +    apdu.ne = res_APDU_size;
 +    return SW_OK();
 +}
@@ -478,6 +484,25 @@ index 0000000..1cbea7a
 +    return SW_OK();
 +}
 +
++/* The WS2812-type LED on SuperMini boards comes with different colour orders
++ * (led_neopixel.c). The order used to be set through the rescue applet, which
++ * is not registered on ESP; this sets only that one PHY field. */
++static int fw_update_led_order(void) {
++    uint8_t order = P1(apdu);
++    if (order > PHY_LED_ORDER_BGR && order != 0xFF) {
++        return SW_INCORRECT_P1P2();
++    }
++    if (!fwu_require_user_presence()) {
++        return SW_SECURITY_STATUS_NOT_SATISFIED();
++    }
++    phy_data.led_order = order == 0xFF ? PHY_LED_ORDER_RGB : order;
++    phy_data.led_order_present = order != 0xFF;
++    if (phy_save() != PICOKEYS_OK) {
++        return SW_EXEC_ERROR();
++    }
++    return SW_OK();
++}
++
 +static const cmd_t cmds[] = {
 +    { 0x01, fw_update_info },
 +    { 0x10, fw_update_begin },
@@ -485,6 +510,7 @@ index 0000000..1cbea7a
 +    { 0x12, fw_update_end },
 +    { 0x13, fw_update_cancel },
 +    { 0x14, fw_update_reboot },
++    { 0x20, fw_update_led_order },
 +    { 0x00, 0x0 }
 +};
 +
