@@ -60,7 +60,7 @@ uv run --no-project --with esptool python -I tools\verify_release.py <保存先>
    LED が赤・緑の順に光るので、何色に見えたかを答える。途中で LED が青く点滅したら BOOT を押すかタッチする
 2. **試しに使ってみる**
    - PIN を設定する：Windows の「設定 → アカウント → サインイン オプション → セキュリティ キー」（PIN は[8文字以上](usage.md#pin-は8文字以上にする)）
-   - https://webauthn.io（Edge / Chrome）で登録し、**キーを抜き差しして**からログインできることを確かめる
+   - https://webauthn.io （Edge / Chrome）で登録し、**キーを抜き差しして**からログインできることを確かめる
 
 ここまでで問題があれば、次へ進まない（この段階なら、署名済みのファームで書き直せる）。
 
