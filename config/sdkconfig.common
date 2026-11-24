@@ -21,3 +21,15 @@ CONFIG_PARTITION_TABLE_OFFSET=0x10000
 # project directory (pico-fido/).
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../config/partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="../config/partitions.csv"
+
+# App rollback and anti-rollback (bootloader). These must be in the bootloader
+# before a board goes to release, which can never change its bootloader again.
+# A new app starts as PENDING_VERIFY and confirms itself once USB is up
+# (pico-keys-sdk main.c); otherwise the next reset goes back to the other slot.
+# Raise SECURE_VERSION only for a security fix: it is burned into eFuse when
+# the app confirms itself, older apps then refuse to boot, and the 16-bit
+# field allows 16 raises in total.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK=y
+CONFIG_BOOTLOADER_APP_SECURE_VERSION=0
+CONFIG_BOOTLOADER_APP_SEC_VER_SIZE_EFUSE_FIELD=16

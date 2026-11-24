@@ -37,7 +37,7 @@ ESP32-S3 SuperMini を FIDO2 セキュリティキーにするファームウェ
 | 乱数 | SAR ADC エントロピーを常時有効（タッチが使えない） | 起動時に CTR-DRBG を初期化 |
 | USB の VID/PID・名前 | Raspberry Pi の番号（2E8A:10FE）、「Pol Henarejos / Pico Key」 | Espressif の VID（303A）、「Alice Core / ESP32-S3 FIDO2 Key」 |
 | AAGUID（機種 ID） | pico-fido 共通（89fb94b7-…） | 独自（fcd33db5-11c4-4f13-9526-9fc4c1447732） |
-| セキュアブート | 有効化すると作者署名のファームしか起動しない | 作者の鍵は使わない。自分の鍵で有効にできる（任意、devsb） |
+| セキュアブート | 有効化すると作者署名のファームしか起動しない | 作者の鍵は使わない。自分の鍵で有効にする（devsb / release） |
 | パーティション | アプリ領域は1面（factory） | 2面（ota_0 / ota_1）。データ領域 part0 の位置は同じ |
 
 ## 必要なもの
@@ -88,23 +88,25 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 ## 書き込み
 
 > [!CAUTION]
-> eFuse の書き込みとフラッシュ暗号化は **元に戻せません。** 必ず A → B → C の順に進め、
+> eFuse の書き込みとフラッシュ暗号化は **元に戻せません。** 必ず A → B → B+ → C の順に進め、
 > 各段階で「PIN 設定 → 登録 → **抜き差し** → ログイン」まで確認してから次へ進んでください。
 
 | 段階 | コマンド | 何が起きるか | 戻せるか |
 |---|---|---|---|
 | A. dev | `.\idf.ps1 dev -p COMx flash` | 初回起動で eFuse KEY3 を焼く | ファームは書き直せる |
 | B. devenc | 初回：`.\idf.ps1 devenc -p COMx flash`<br>以降：`.\idf.ps1 devenc -p COMx encrypted-flash` | 初回起動でブートローダがフラッシュを暗号化する（開発モード） | 暗号化は解除できないが、`encrypted-flash` で書き直せる |
-| B+. devsb（任意） | `.\idf.ps1 devsb -p COMx encrypted-flash` | B に加えて、初回起動でブートローダがセキュアブートを有効にする（[下記](#セキュアブートdevsb任意)） | **セキュアブートは解除できない。** 登録した鍵で署名すれば書き直せる |
-| C. release | `.\idf.ps1 release -p COMx encrypted-flash` | 起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。ファームも更新できなくなる** |
+| B+. devsb | `.\idf.ps1 devsb -p COMx encrypted-flash` | B に加えて、初回起動でブートローダがセキュアブートを有効にする（[下記](#セキュアブートdevsb)） | **セキュアブートは解除できない。** 登録した鍵で署名すれば書き直せる |
+| C. release | `.\idf.ps1 release -p COMx encrypted-flash` | B+ と同じ鍵で署名して書く。起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。** ブートローダは二度と変えられない。アプリはファーム自身の更新機能でしか変えられない（USB 経由の更新は未実装なので、今は更新できない） |
 
 - 書き込むと USB が FIDO2 デバイスに切り替わり、COM ポートは消える。書き直すときは **BOOT を押しながら RST** を押してダウンロードモードに入れる
 - 書き込んだあとは **基板の RST だけを押して** 起動する。USB 経由のリセットでは、手で入れたダウンロードモードから抜けられない
 - B の間は盗難対策にならない（他人が自分のファームを書き込み、HMAC 回路を使える。フラッシュを吸い出して書き戻せば PIN の失敗回数も戻せる）。大事なアカウントは C の後に登録する
 - C の後は、試験中の登録を消すため Windows の「セキュリティ キーのリセット」をする（親鍵も作り直される）
-- **B+ の基板に今の C は書けない。** release プロファイルはまだセキュアブートに対応しておらず、署名の無いファームは起動しない（起動しないので release への切り替えも起きず、devsb で書き直せば戻る）
+- `idf.ps1 release` は、開発モードで暗号化済み **かつ** セキュアブートが有効な基板（B+ を通ったもの）にしか書かない。`$env:ESP32S3_FIDO_RELEASE_OK = 'yes'` と、devsb と同じ `$env:ESP32S3_FIDO_SB_VAULT` / `$env:ESP32S3_FIDO_SB_KEYS` が要る
+- ブートローダには、ロールバック（更新したアプリが USB の接続まで行けなければ、次の起動で前の面に戻す）と巻き戻し防止（`config/sdkconfig.common` の `CONFIG_BOOTLOADER_APP_SECURE_VERSION` より古いアプリを起動しない）を入れてある。C の後はブートローダを変えられないので、この2つは C の前に入っている必要がある
+- `SECURE_VERSION` を上げるのは、古い版を使わせたくない脆弱性を直したときだけ。上げた版が起動すると eFuse に焼かれ、上げられるのは全部で16回
 
-### セキュアブート（devsb、任意）
+### セキュアブート（devsb）
 
 自分の署名鍵（RSA-3072、最大3本）で署名したブートローダとアプリしか起動しないようにする。
 
@@ -137,7 +139,7 @@ ESP-IDF が無くても、esptool だけで書き込める。
 |---|---|
 | `esp32s3-fido-<版>-dev.zip` | 段階 A 用 |
 | `esp32s3-fido-<版>-devenc.zip` | 段階 B 用 |
-| `esp32s3-fido-<版>-release.zip` | 段階 C 用（**戻せない**） |
+| `esp32s3-fido-<版>-release.zip` | 段階 C 用の**署名なし**のイメージ。セキュアブートの基板では起動しないので、そのままでは使えない（署名付きの配布は準備中） |
 | `SHA256SUMS` | 各 zip の SHA-256 |
 
 ### 本物か確かめる
@@ -158,11 +160,11 @@ zip を展開したフォルダで実行する。段階の進め方と注意は[
 ```powershell
 # A. dev / B. devenc の初回
 uvx esptool --chip esp32s3 -p COMx write-flash "@flash_args"
-# B. devenc の2回目以降、C. release（開発モードで暗号化済みの基板にだけ）
+# B. devenc の2回目以降
 uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
 ```
 
-- `idf.ps1` の release の安全装置（開発モードで暗号化済みかの確認）は esptool には無い。release は、段階 B で動作を確かめた基板にだけ書き込むこと
+- B+（devsb）と C（release）は、自分の鍵での署名が要るので、配布バイナリではなく自分でビルドして `idf.ps1` で書く
 
 ## 使い方
 
@@ -304,6 +306,17 @@ AAGUID は認証器の機種を表す ID。本家のままだと pico-fido と�
 ```powershell
 uv run --no-project --with pyscard python -I tools\ccid\getinfo.py
 ```
+
+</details>
+
+<details>
+<summary><b>10. OTA のロールバックに対応する</b>（<code>src/main.c</code>、<code>config/mbedtls_config.h</code>、<code>picokeys_sdk_import.cmake</code>）</summary>
+
+ブートローダのロールバック機能（`config/sdkconfig.common`）は、更新したアプリを「確認待ち」で起動し、アプリが自分を「正常」と記録しないまま次に再起動すると、前の面に戻す。
+
+- USB が使えるようになった時点で、1回だけ `esp_ota_mark_app_valid_cancel_rollback()` を呼ぶ。巻き戻し防止の版番号も、ここで eFuse に焼かれる
+- esptool で書いたアプリは「確認待ち」にならないので、呼んでも何も変わらない（エラーを1行ログに出すだけ）
+- セキュアブートを有効にすると、ESP-IDF はアプリ側でも更新イメージの署名を確かめる。その処理が mbedTLS のエントロピー機能を使うため、本家では無効の `MBEDTLS_ENTROPY_C` を ESP でも有効にし、`entropy.c` / `entropy_poll.c` をビルドに加えた（乱数源はハードウェアだけ。`MBEDTLS_NO_PLATFORM_ENTROPY`）
 
 </details>
 

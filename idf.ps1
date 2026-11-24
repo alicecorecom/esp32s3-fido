@@ -3,9 +3,10 @@
 # (export.ps1 calls `python` from PATH, which is the Microsoft Store stub on this PC.)
 #
 #   .\idf.ps1 dev build                 # unencrypted test build  -> build\dev
-#   .\idf.ps1 release build             # flash-encrypted build   -> build\release
+#   .\idf.ps1 release build             # RELEASE + Secure Boot   -> build\release
 #   .\idf.ps1 dev -p COM9 flash monitor
-#   .\idf.ps1 devsb -p COM9 encrypted-flash   # signs with 1Password keys, see below
+#   .\idf.ps1 devsb -p COM9 encrypted-flash     # signs with 1Password keys, see below
+#   .\idf.ps1 release -p COM9 encrypted-flash   # devsb boards only, irreversible
 #
 # Extra arguments are passed to idf.py unchanged.
 # No param() block on purpose: PowerShell would treat idf.py's "-p" as an
@@ -58,78 +59,84 @@ if (Test-Path $sdkconfig) {
 $idfPy = @("$IdfPath\tools\idf.py", '-C', $proj, '-B', $build,
     '-D', "SDKCONFIG=$build\sdkconfig", '-D', "SDKCONFIG_DEFAULTS=$defaults")
 
-# Release writes are irreversible. Only `-p COMx encrypted-flash`, only onto a
-# board that is in DEVELOPMENT flash encryption (SPI_BOOT_CRYPT_CNT = 0x1, i.e.
-# it passed the devenc stage), and only with an explicit confirmation in the
-# environment. ESP-IDF has no encrypted-flash target for a RELEASE-mode build,
-# so the images are written with esptool's --encrypt (the chip encrypts them
-# with its own key, as `encrypted-flash` does for devenc).
+# devsb and release: Secure Boot V2 boards. Only `-p COMx encrypted-flash`.
+# Checks the board, builds, signs the bootloader and the app with every key in
+# $env:ESP32S3_FIDO_SB_KEYS (1Password document names or IDs, ';'-separated,
+# primary first) from vault $env:ESP32S3_FIDO_SB_VAULT, and writes them with
+# esptool --encrypt (the chip encrypts with its own key; ESP-IDF has no
+# encrypted-flash target for RELEASE mode and leaves the bootloader out of
+# flash_args under Secure Boot).
+#   devsb:   board in DEVELOPMENT flash encryption. If Secure Boot is not
+#            enabled yet, the first boot burns the key digests: needs
+#            $env:ESP32S3_FIDO_SB_OK = "yes".
+#   release: board in DEVELOPMENT flash encryption with Secure Boot enabled
+#            (it passed devsb). The first boot switches to RELEASE mode and
+#            secure download mode: needs $env:ESP32S3_FIDO_RELEASE_OK = "yes".
+# Each confirmation is consumed by one run.
 $flashActions = $IdfArgs | Where-Object { $_ -match 'flash$' }
-if ($Profile -eq 'release' -and $flashActions) {
+if ($Profile -in @('devsb', 'release') -and $flashActions) {
     if ($IdfArgs.Count -ne 3 -or $IdfArgs[0] -ne '-p' -or $IdfArgs[2] -ne 'encrypted-flash') {
-        throw 'release: usage is .\idf.ps1 release -p COMx encrypted-flash'
+        throw "${Profile}: usage is .\idf.ps1 $Profile -p COMx encrypted-flash"
     }
-    if ($env:ESP32S3_FIDO_RELEASE_OK -ne 'yes') {
+    if (-not $env:ESP32S3_FIDO_SB_VAULT -or -not $env:ESP32S3_FIDO_SB_KEYS) {
+        throw "${Profile}: set `$env:ESP32S3_FIDO_SB_VAULT and `$env:ESP32S3_FIDO_SB_KEYS (`"key1;key2`")"
+    }
+    if ($Profile -eq 'release' -and $env:ESP32S3_FIDO_RELEASE_OK -ne 'yes') {
         throw 'release: irreversible. Set $env:ESP32S3_FIDO_RELEASE_OK = "yes" to confirm.'
     }
     $port = $IdfArgs[1]
     $ErrorActionPreference = 'Continue'
-    & $py.FullName @idfPy build
-    if ($LASTEXITCODE -ne 0) { throw 'release: build failed' }
-    $info = & $py.FullName -m esptool --chip esp32s3 -p $port --after no_reset get_security_info 2>&1 | Out-String
+    $info = & $py.FullName -m esptool --chip esp32s3 -p $port --after no_reset --no-stub get_security_info 2>&1 | Out-String
     $ErrorActionPreference = 'Stop'
     if ($info -notmatch 'SPI_BOOT_CRYPT_CNT\)\s*:\s*0x1\b') {
         Write-Host $info
-        throw 'release: board is not in DEVELOPMENT flash encryption (devenc). Refusing.'
-    }
-    Remove-Item Env:ESP32S3_FIDO_RELEASE_OK   # one confirmation per run
-    Push-Location $build   # flash_args holds paths relative to the build directory
-    try {
-        $ErrorActionPreference = 'Continue'
-        & $py.FullName -m esptool --chip esp32s3 -p $port -b 460800 --before default_reset --after no_reset `
-            write_flash --encrypt '@flash_args'
-        exit $LASTEXITCODE
-    } finally { Pop-Location }
-}
-
-# devsb: Secure Boot V2. Only `-p COMx encrypted-flash`, only onto a board in
-# DEVELOPMENT flash encryption. Builds, signs the bootloader and the app with
-# every key in $env:ESP32S3_FIDO_SB_KEYS (1Password document names or IDs,
-# ';'-separated, primary first) from vault $env:ESP32S3_FIDO_SB_VAULT, then
-# writes them with --encrypt. If Secure Boot is not enabled on the board yet,
-# its first boot burns the key digests (IRREVERSIBLE): that needs
-# $env:ESP32S3_FIDO_SB_OK = "yes".
-if ($Profile -eq 'devsb' -and $flashActions) {
-    if ($IdfArgs.Count -ne 3 -or $IdfArgs[0] -ne '-p' -or $IdfArgs[2] -ne 'encrypted-flash') {
-        throw 'devsb: usage is .\idf.ps1 devsb -p COMx encrypted-flash'
-    }
-    if (-not $env:ESP32S3_FIDO_SB_VAULT -or -not $env:ESP32S3_FIDO_SB_KEYS) {
-        throw 'devsb: set $env:ESP32S3_FIDO_SB_VAULT and $env:ESP32S3_FIDO_SB_KEYS ("key1;key2")'
-    }
-    $port = $IdfArgs[1]
-    $ErrorActionPreference = 'Continue'
-    $info = & $py.FullName -m esptool --chip esp32s3 -p $port --after no_reset get_security_info 2>&1 | Out-String
-    $ErrorActionPreference = 'Stop'
-    if ($info -notmatch 'SPI_BOOT_CRYPT_CNT\)\s*:\s*0x1\b') {
-        Write-Host $info
-        throw 'devsb: board is not in DEVELOPMENT flash encryption (devenc). Refusing.'
+        throw "${Profile}: board is not in DEVELOPMENT flash encryption (devenc). Refusing."
     }
     $sbEnabled = $info -match 'Secure Boot:\s*Enabled'
-    if (-not $sbEnabled -and $env:ESP32S3_FIDO_SB_OK -ne 'yes') {
+    if ($Profile -eq 'release' -and -not $sbEnabled) {
+        Write-Host $info
+        throw 'release: Secure Boot is not enabled on this board. Go through devsb first. Refusing.'
+    }
+    if ($Profile -eq 'devsb' -and -not $sbEnabled -and $env:ESP32S3_FIDO_SB_OK -ne 'yes') {
         Write-Host $info
         throw 'devsb: Secure Boot is not enabled on this board; the first boot will burn eFuses. Set $env:ESP32S3_FIDO_SB_OK = "yes" to confirm.'
     }
+    $keyArgs = @($env:ESP32S3_FIDO_SB_KEYS.Split(';') | Where-Object { $_ } | ForEach-Object { '--key', $_ })
+
+    # With Secure Boot on, esptool refuses to write below 0x8000 (the
+    # bootloader) unless --force: a bootloader the ROM cannot verify would not
+    # boot. Only force after checking that every signing key is one the board
+    # trusts (its digest is in a SECURE_BOOT_DIGESTn slot that is not revoked).
+    $force = @()
+    if ($sbEnabled) {
+        $ErrorActionPreference = 'Continue'
+        $json = & $py.FullName -m espefuse --chip esp32s3 -p $port --before default_reset summary --format json 2>$null | Out-String
+        $mine = @(& $py.FullName -I (Join-Path $root 'tools\sbsign.py') --vault $env:ESP32S3_FIDO_SB_VAULT @keyArgs --digests)
+        if ($LASTEXITCODE -ne 0) { throw "${Profile}: reading the signing keys failed" }
+        $ErrorActionPreference = 'Stop'
+        $ef = $json.Substring($json.IndexOf('{')) | ConvertFrom-Json
+        $trusted = @(foreach ($k in 0..5) {
+            if ($ef."KEY_PURPOSE_$k".value -match '^SECURE_BOOT_DIGEST(\d)$' -and -not $ef."SECURE_BOOT_KEY_REVOKE$($Matches[1])".value) {
+                $ef."BLOCK_KEY$k".value
+            }
+        })
+        $untrusted = @($mine | Where-Object { $_ -notin $trusted })
+        if ($mine.Count -eq 0 -or $untrusted.Count -gt 0) {
+            throw "${Profile}: signing key(s) not trusted by this board:`n$($untrusted -join "`n")`ntrusted:`n$($trusted -join "`n")"
+        }
+        Write-Host "${Profile}: all $($mine.Count) signing key(s) are trusted by the board"
+        $force = @('--force')
+    }
 
     $ErrorActionPreference = 'Continue'
     & $py.FullName @idfPy build
-    if ($LASTEXITCODE -ne 0) { throw 'devsb: build failed' }
+    if ($LASTEXITCODE -ne 0) { throw "${Profile}: build failed" }
     $signed = Join-Path $build 'signed'
     New-Item -ItemType Directory -Force $signed | Out-Null
-    $keyArgs = @($env:ESP32S3_FIDO_SB_KEYS.Split(';') | Where-Object { $_ } | ForEach-Object { '--key', $_ })
     foreach ($img in 'bootloader\bootloader.bin', 'pico_fido.bin') {
         & $py.FullName -I (Join-Path $root 'tools\sbsign.py') --vault $env:ESP32S3_FIDO_SB_VAULT @keyArgs `
             (Join-Path $build $img) (Join-Path $signed (Split-Path $img -Leaf))
-        if ($LASTEXITCODE -ne 0) { throw "devsb: signing $img failed" }
+        if ($LASTEXITCODE -ne 0) { throw "${Profile}: signing $img failed" }
     }
     $ErrorActionPreference = 'Stop'
     # flash_args leaves the bootloader out under Secure Boot
@@ -140,20 +147,21 @@ if ($Profile -eq 'devsb' -and $flashActions) {
     $lines = $lines -replace ' bootloader/bootloader\.bin$', ' signed/bootloader.bin' `
         -replace ' pico_fido\.bin$', ' signed/pico_fido.bin'
     if (-not ($lines -match '^0x0 signed/bootloader\.bin$') -or -not ($lines -match ' signed/pico_fido\.bin$')) {
-        throw "devsb: signed bootloader/app missing from the flash list:`n$($lines -join "`n")"
+        throw "${Profile}: signed bootloader/app missing from the flash list:`n$($lines -join "`n")"
     }
     $lines | Set-Content -Encoding ascii (Join-Path $build 'signed_flash_args')
 
-    if (-not $sbEnabled) { Remove-Item Env:ESP32S3_FIDO_SB_OK }   # one confirmation per run
+    Remove-Item Env:ESP32S3_FIDO_SB_OK, Env:ESP32S3_FIDO_RELEASE_OK -ErrorAction SilentlyContinue
     Push-Location $build
     try {
         $ErrorActionPreference = 'Continue'
         # Secure Boot builds select ESPTOOLPY_NO_STUB; do the same here.
         & $py.FullName -m esptool --chip esp32s3 -p $port -b 460800 --before default_reset --after no_reset --no-stub `
-            write_flash --encrypt '@signed_flash_args'
+            write_flash @force --encrypt '@signed_flash_args'
         exit $LASTEXITCODE
     } finally { Pop-Location }
 }
+
 
 # idf.py/CMake print progress on stderr; do not treat that as a PowerShell error.
 $ErrorActionPreference = 'Continue'

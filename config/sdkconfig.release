@@ -1,13 +1,22 @@
-# Production profile: flash encryption in RELEASE mode. IRREVERSIBLE.
-# Only flash this onto a board that already passed the devenc profile, using
-# `.\idf.ps1 release -p COMx encrypted-flash`. On first boot the app calls
-# esp_flash_encryption_set_release_mode() (otp_esp32.c patch), which turns the
-# DEVELOPMENT eFuses into RELEASE and enables secure download mode.
+# Production profile: flash encryption in RELEASE mode + Secure Boot V2.
+# IRREVERSIBLE. Only for a board that already passed devsb (Secure Boot
+# enabled, flash encryption in DEVELOPMENT mode), using
+# `.\idf.ps1 release -p COMx encrypted-flash` (signs with the devsb keys).
+# On first boot the app calls esp_flash_encryption_set_release_mode()
+# (otp_esp32.c patch), which turns the DEVELOPMENT eFuses into RELEASE and
+# enables secure download mode. After that the ROM can no longer write
+# encrypted flash: the bootloader is final, and the app can only be replaced
+# by the app itself (OTA).
 
 CONFIG_SECURE_FLASH_ENC_ENABLED=y
 CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
 CONFIG_SECURE_FLASH_ENCRYPTION_AES128=y
 CONFIG_SECURE_FLASH_CHECK_ENC_EN_IN_APP=y
+
+CONFIG_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+# Signed by idf.ps1 through tools/sbsign.py (keys stay in 1Password).
+# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set
 
 # ROM download mode: "secure" = no flash/RAM reads, no plaintext writes that
 # would boot; espefuse summary also stops working, get-security-info still works.

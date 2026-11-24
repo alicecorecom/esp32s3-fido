@@ -11,10 +11,20 @@ index eb4cb57..8e614aa 100755
  )
  if(USB_ITF_HID)
 diff --git a/config/mbedtls_config.h b/config/mbedtls_config.h
-index f463a1c..ac71688 100644
+index f463a1c..00d5ef5 100644
 --- a/config/mbedtls_config.h
 +++ b/config/mbedtls_config.h
-@@ -2218,7 +2218,7 @@
+@@ -1040,6 +1040,9 @@
+  * Uncomment this macro to disable the built-in platform entropy functions.
+  */
+ //#define MBEDTLS_NO_PLATFORM_ENTROPY
++#ifdef ESP_PLATFORM  /* esp32s3-fido: no /dev/urandom; hardware source only */
++#define MBEDTLS_NO_PLATFORM_ENTROPY
++#endif
+ 
+ /**
+  * \def MBEDTLS_ENTROPY_FORCE_SHA256
+@@ -2218,7 +2221,7 @@
   *
   * This module provides the CTR_DRBG AES random number generator.
   */
@@ -23,25 +33,39 @@ index f463a1c..ac71688 100644
  #define MBEDTLS_CTR_DRBG_C
  #endif
  
+@@ -2355,7 +2358,7 @@
+  *
+  * This module provides a generic entropy pool
+  */
+-#ifdef ENABLE_EMULATION
++#if defined(ENABLE_EMULATION) || defined(ESP_PLATFORM)  /* esp32s3-fido: ESP-IDF's app-side Secure Boot check */
+ #define MBEDTLS_ENTROPY_C
+ #endif
+ 
 diff --git a/picokeys_sdk_import.cmake b/picokeys_sdk_import.cmake
-index 365212e..5c375d5 100644
+index 365212e..c91dd52 100644
 --- a/picokeys_sdk_import.cmake
 +++ b/picokeys_sdk_import.cmake
-@@ -218,6 +218,13 @@ set(MBEDTLS_SOURCES
+@@ -218,6 +218,18 @@ set(MBEDTLS_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/third-party/mbedtls/library/pkcs12.c
  )
  
 +if(ESP_PLATFORM)
 +    # esp32s3-fido: hwrng.c seeds a CTR-DRBG at boot (see the comment there).
++    # ESP-IDF's app-side Secure Boot V2 check (OTA / anti-rollback) seeds a
++    # CTR-DRBG from mbedtls_entropy_func, so the entropy module is needed too
++    # (hardware source: mbedtls_hardware_poll in ESP-IDF's esp_hardware.c).
 +    list(APPEND MBEDTLS_SOURCES
 +        ${CMAKE_CURRENT_LIST_DIR}/third-party/mbedtls/library/ctr_drbg.c
++        ${CMAKE_CURRENT_LIST_DIR}/third-party/mbedtls/library/entropy.c
++        ${CMAKE_CURRENT_LIST_DIR}/third-party/mbedtls/library/entropy_poll.c
 +    )
 +endif()
 +
  if(ENABLE_EDDSA)
      list(APPEND MBEDTLS_SOURCES
          ${CMAKE_CURRENT_LIST_DIR}/third-party/mbedtls/library/eddsa.c
-@@ -383,6 +390,7 @@ list(APPEND PICOKEYS_SOURCES
+@@ -383,6 +395,7 @@ list(APPEND PICOKEYS_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/src/serial.c
      ${CMAKE_CURRENT_LIST_DIR}/src/pico_time.c
      ${CMAKE_CURRENT_LIST_DIR}/src/button.c
@@ -340,10 +364,44 @@ index f93a2f8..c8c79ea 100644
              return NP_RGB(r, b, g);
          case PHY_LED_ORDER_GRB:
 diff --git a/src/main.c b/src/main.c
-index 7a910ac..d3ef4f0 100644
+index 7a910ac..d34d058 100644
 --- a/src/main.c
 +++ b/src/main.c
-@@ -200,7 +200,7 @@ int main(void) {
+@@ -123,6 +123,25 @@ void execute_tasks(void) {
+ #endif
+ }
+ 
++#ifdef ESP_PLATFORM
++#include "esp_ota_ops.h"
++/* esp32s3-fido: after an OTA update the bootloader starts the new app as
++ * PENDING_VERIFY and rolls back to the previous slot on the next reset unless
++ * the app confirms itself. Confirm once USB has enumerated, i.e. the app works
++ * well enough to be updated again. With anti-rollback this also raises the
++ * eFuse secure version to the app's. Images written with esptool have no
++ * active otadata entry and return an error here, which is fine. */
++static void esp32s3_fido_confirm_app(void) {
++    static bool done = false;
++    if (done || !tud_mounted()) {
++        return;
++    }
++    done = true;
++    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
++    printf("OTA: confirm running app: %s\n", esp_err_to_name(err));
++}
++#endif
++
+ static void core0_loop(void *arg) {
+     (void)arg;
+ #if defined(ESP_PLATFORM) && defined(USB_ITF_LWIP)
+@@ -140,6 +159,7 @@ static void core0_loop(void *arg) {
+         tight_loop_contents();
+ #endif
+ #ifdef ESP_PLATFORM
++        esp32s3_fido_confirm_app();
+         vTaskDelay(pdMS_TO_TICKS(10));
+ #endif
+     }
+@@ -200,7 +220,7 @@ int main(void) {
      if (phy_data.usb_product_present) {
          tusb_cfg.string_descriptor[2] = phy_data.usb_product;
      }
