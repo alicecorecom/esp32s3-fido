@@ -96,7 +96,7 @@ Copy-Item config\dependencies.lock pico-fido\   # ESP-IDF コンポーネント�
 | A. dev | `.\idf.ps1 dev -p COMx flash` | 初回起動で eFuse KEY3 を焼く | ファームは書き直せる |
 | B. devenc | 初回：`.\idf.ps1 devenc -p COMx flash`<br>以降：`.\idf.ps1 devenc -p COMx encrypted-flash` | 初回起動でブートローダがフラッシュを暗号化する（開発モード） | 暗号化は解除できないが、`encrypted-flash` で書き直せる |
 | B+. devsb | `.\idf.ps1 devsb -p COMx encrypted-flash` | B に加えて、初回起動でブートローダがセキュアブートを有効にする（[下記](#セキュアブートdevsb)） | **セキュアブートは解除できない。** 登録した鍵で署名すれば書き直せる |
-| C. release | `.\idf.ps1 release -p COMx encrypted-flash` | B+ と同じ鍵で署名して書く。起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。** ブートローダは二度と変えられない。アプリはファーム自身の更新機能でしか変えられない（USB 経由の更新は未実装なので、今は更新できない） |
+| C. release | `.\idf.ps1 release -p COMx encrypted-flash` | B+ と同じ鍵で署名して書く。起動時にアプリが release モードへ切り替え、secure download mode を有効にする | **戻せない。** ブートローダは二度と変えられない。アプリは [USB 経由の更新](#ファームの更新usb-経由) でしか変えられない |
 
 - 書き込むと USB が FIDO2 デバイスに切り替わり、COM ポートは消える。書き直すときは **BOOT を押しながら RST** を押してダウンロードモードに入れる
 - 書き込んだあとは **基板の RST だけを押して** 起動する。USB 経由のリセットでは、手で入れたダウンロードモードから抜けられない
@@ -180,6 +180,22 @@ uvx esptool --chip esp32s3 -p COMx write-flash "@encrypted_flash_args"
 | 赤でゆっくり点滅 | 挿して3秒経っても USB が使えない（充電専用ケーブルなど） |
 | 赤で速く点滅 | 起動時の致命的エラー（eFuse の鍵・データ領域）。起動を止めている |
 | 挿しても何も光らない | アプリが起動していない（セキュアブートの署名の拒否、ファームの破損など）。LED はアプリが光らせるので、その手前のブートローダで止まると光らない。COM ポートの起動ログで理由がわかる |
+
+### ファームの更新（USB 経由）
+
+ダウンロードモードに入れなくても、挿したまま USB でファームを更新できる。release（段階 C）にした後は、これが唯一の更新手段になる。
+スマートカード（CCID）経由なので、Windows でも管理者権限は要らない。
+
+```powershell
+uv run --no-project --with pyscard python -I tools\fwupdate.py info                                  # 起動中の面・版・状態
+uv run --no-project --with pyscard python -I tools\fwupdate.py update build\devsb\signed\pico_fido.bin  # 更新
+```
+
+- `update` を始めると LED が青く点滅するので、BOOT かタッチで本人確認する。そのあと、今使っていない方の面（ota_0 / ota_1）に書き込む（約 720KB で30秒ほど）
+- 書き終わるとキー自身がイメージを検証する。セキュアブートの基板では **登録した鍵の署名と、巻き戻し防止の版番号も確かめ、合わなければ受け付けない**（ツール側の検査を飛ばしても同じ）
+- 受け付けたら次の起動先をその面にして再起動する。新しいファームは「確認待ち」で起動し、USB がつながると自分を「正常」と記録する。記録しないまま再起動すると、ブートローダが前の面に戻す
+- 送るのはアプリ（`pico_fido.bin`）だけ。セキュアブートの基板には署名済みのもの（`idf.ps1 devsb` / `release` の書き込みで `build\<profile>\signed\` にできる）を送る。ブートローダやパーティション表は更新できない
+- データ領域（part0）には触れないので、登録済みのパスキーはそのまま残る
 
 ## 改造の詳細
 
@@ -320,6 +336,25 @@ uv run --no-project --with pyscard python -I tools\ccid\getinfo.py
 
 </details>
 
+<details>
+<summary><b>11. USB 経由のファーム更新</b>（<code>src/fw_update.c</code>、<code>tools/fwupdate.py</code>）</summary>
+
+APDU で更新イメージを受け取るアプレット（AID `F0 65 73 70 66 69 64 6F`、"espfido"）を足した。CCID と WCID（WinUSB）の両方から届く。
+
+| INS | 命令 | 内容 |
+|---|---|---|
+| 01 | INFO | 起動中の面と状態、アプリと eFuse の巻き戻し防止の版番号、アプリの版・ビルド日時・ESP-IDF の版、ELF SHA-256、セキュアブートと暗号化の状態 |
+| 10 | BEGIN | 全体の大きさを受け取る。**本人確認が必須**（本人確認の設定にかかわらず必ず待つ） |
+| 11 | WRITE | 位置＋データ。先頭から順番に書く（位置が飛んだら中止） |
+| 12 | END | `esp_ota_end()` でイメージを検証（セキュアブートなら署名も）し、次の起動先にする |
+| 13 / 14 | ABORT / REBOOT | 中止 / 応答を返してから再起動 |
+
+- 書き込みは `esp_ota_begin(…, OTA_WITH_SEQUENTIAL_WRITES)` で、書くそばから消去する（1MB を一度に消すと命令が長く止まるため）
+- 別のアプレットが選ばれたら、書きかけのイメージは捨てる
+- 試験済み（1台目、devsb）：本番の鍵で署名したものは受け付けて ota_0 → ota_1 に切り替わる。登録していない鍵の署名は END で拒否。「正常」と記録しない版に更新して再起動すると、前の面に戻る
+
+</details>
+
 ## タッチの測定ツール
 
 `tools/touchprobe` は、ファームと同じ `touch_button.c` を動かし、測定値と判定を USB シリアルに 0.1秒ごとに表示する小さなアプリ。
@@ -341,7 +376,7 @@ esptool --chip esp32s3 --port COMx write-flash --encrypt 0x20000 build\touchprob
 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）。
 
 - 元になった pico-fido / pico-keys-sdk は Copyright (c) Pol Henarejos、AGPL-3.0-only。`patches/` の改造はその派生物で、同じライセンスに従う
-- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`tools/sbsign.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
+- このリポジトリで新しく書いたもの（`idf.ps1`、`check_no_radio.ps1`、`config/`、`ci/`、`.github/`、`tools/sbsign.py`、`tools/fwupdate.py`、`tools/touchprobe/`、パッチで追加する `touch_button.c/.h`・`fw_update.c`）は Copyright (c) 2026 Alice Core、AGPL-3.0-only
 - ESP-IDF（Apache-2.0）、TinyUSB（MIT）、Mbed TLS（Apache-2.0）などは、それぞれのライセンスに従う
 
 ファームを書き込んだキーを人に渡す場合は、対応するソース（このリポジトリと、ビルドに使ったコミット）を入手できるようにしてください。

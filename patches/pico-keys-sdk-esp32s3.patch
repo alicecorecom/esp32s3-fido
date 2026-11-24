@@ -43,7 +43,7 @@ index f463a1c..00d5ef5 100644
  #endif
  
 diff --git a/picokeys_sdk_import.cmake b/picokeys_sdk_import.cmake
-index 365212e..c91dd52 100644
+index 365212e..0667756 100644
 --- a/picokeys_sdk_import.cmake
 +++ b/picokeys_sdk_import.cmake
 @@ -218,6 +218,18 @@ set(MBEDTLS_SOURCES
@@ -65,11 +65,12 @@ index 365212e..c91dd52 100644
  if(ENABLE_EDDSA)
      list(APPEND MBEDTLS_SOURCES
          ${CMAKE_CURRENT_LIST_DIR}/third-party/mbedtls/library/eddsa.c
-@@ -383,6 +395,7 @@ list(APPEND PICOKEYS_SOURCES
+@@ -383,6 +395,8 @@ list(APPEND PICOKEYS_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/src/serial.c
      ${CMAKE_CURRENT_LIST_DIR}/src/pico_time.c
      ${CMAKE_CURRENT_LIST_DIR}/src/button.c
 +    ${CMAKE_CURRENT_LIST_DIR}/src/touch_button.c
++    ${CMAKE_CURRENT_LIST_DIR}/src/fw_update.c
      ${CMAKE_CURRENT_LIST_DIR}/src/led/led.c
      ${CMAKE_CURRENT_LIST_DIR}/src/signal.c
      ${CMAKE_CURRENT_LIST_DIR}/src/vault.c
@@ -243,6 +244,280 @@ index 5ac7185..4e5c794 100644
      data_start_addr = 0;
      data_end_addr = part0->size;
      FLASH_SIZE_BYTES = part0->size;
+diff --git a/src/fw_update.c b/src/fw_update.c
+new file mode 100644
+index 0000000..1cbea7a
+--- /dev/null
++++ b/src/fw_update.c
+@@ -0,0 +1,268 @@
++/*
++ * esp32s3-fido: firmware update over USB (CCID / WCID APDUs).
++ * Copyright (c) 2026 Alice Core
++ * SPDX-License-Identifier: AGPL-3.0-only
++ *
++ * Writes a new app image into the other OTA slot. ESP-IDF checks the image in
++ * esp_ota_end(): with Secure Boot V2 that includes the signature (keys burned
++ * in eFuse) and, with anti-rollback, the secure version. The new app boots as
++ * PENDING_VERIFY and confirms itself once USB is up (main.c); otherwise the
++ * bootloader goes back to the previous slot.
++ *
++ * Starting an update needs user presence (BOOT / touch).
++ *
++ * CLA 0x80
++ *   INS 0x01 INFO    -> see fw_update_info()
++ *   INS 0x10 BEGIN   data: total image size (u32 BE). Asks for presence.
++ *   INS 0x11 WRITE   data: offset (u32 BE) + bytes. Strictly sequential.
++ *   INS 0x12 END     checks the image, sets it as the next boot slot.
++ *   INS 0x13 ABORT
++ *   INS 0x14 REBOOT  restarts after the response has been sent.
++ */
++#ifdef ESP_PLATFORM
++
++#include "picokeys.h"
++#include "apdu.h"
++#include "button.h"
++#include "usb.h"
++#include "esp_ota_ops.h"
++#include "esp_app_desc.h"
++#include "esp_efuse.h"
++#include "esp_flash_encrypt.h"
++#include "esp_secure_boot.h"
++#include "esp_system.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++
++#define FWU_INFO_FORMAT 1
++
++static const uint8_t fw_update_aid[] = {
++    8,
++    0xF0, 'e', 's', 'p', 'f', 'i', 'd', 'o'   /* proprietary (F0) AID */
++};
++
++static esp_ota_handle_t fwu_handle;
++static const esp_partition_t *fwu_part;
++static uint32_t fwu_total, fwu_written;
++static bool fwu_active;
++
++static void fwu_abort(void) {
++    if (fwu_active) {
++        esp_ota_abort(fwu_handle);
++    }
++    fwu_active = false;
++    fwu_part = NULL;
++    fwu_total = fwu_written = 0;
++}
++
++static bool fwu_require_user_presence(void) {
++    bool previous_force = force_button_wait;
++    force_button_wait = true;  /* always ask, whatever the presence settings */
++    uint32_t event = EV_PRESS_BUTTON_WITH_TIMEOUT(button_timeout_seconds());
++    queue_add_blocking(&card_to_usb_q, &event);
++    do {
++        queue_remove_blocking(&usb_to_card_q, &event);
++    } while (event != EV_BUTTON_PRESSED && event != EV_BUTTON_TIMEOUT && event != EV_BUTTON_CANCELLED);
++    force_button_wait = previous_force;
++    return event == EV_BUTTON_PRESSED;
++}
++
++static void put_str(const char *s, size_t field) {
++    size_t n = strnlen(s, field);
++    memset(res_APDU + res_APDU_size, 0, field);
++    memcpy(res_APDU + res_APDU_size, s, n);
++    res_APDU_size += (uint16_t)field;
++}
++
++/* INFO response, all integers big endian:
++ *   u8  format (1)
++ *   u8  running slot (0 = ota_0, 1 = ota_1, 0xFF = other)
++ *   u8  running state (esp_ota_img_states_t, 0xFF = unknown)
++ *   u8  flags: bit0 Secure Boot, bit1 flash encryption, bit2 release mode,
++ *              bit3 update in progress
++ *   u32 app secure version
++ *   u32 eFuse secure version
++ *   u32 slot size
++ *   32  app version (NUL padded)
++ *   32  project name
++ *   16  build date, 16 build time
++ *   32  ESP-IDF version
++ *   32  ELF SHA-256 of the running app
++ */
++static int fw_update_info(void) {
++    const esp_partition_t *run = esp_ota_get_running_partition();
++    const esp_app_desc_t *d = esp_app_get_description();
++    esp_ota_img_states_t st;
++    uint8_t flags = 0;
++    if (esp_secure_boot_enabled()) {
++        flags |= 0x01;
++    }
++    if (esp_flash_encryption_enabled()) {
++        flags |= 0x02;
++    }
++    if (esp_get_flash_encryption_mode() == ESP_FLASH_ENC_MODE_RELEASE) {
++        flags |= 0x04;
++    }
++    if (fwu_active) {
++        flags |= 0x08;
++    }
++    res_APDU_size = 0;
++    res_APDU[res_APDU_size++] = FWU_INFO_FORMAT;
++    res_APDU[res_APDU_size++] = run && run->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_0 && run->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_1
++                                ? (uint8_t)(run->subtype - ESP_PARTITION_SUBTYPE_APP_OTA_0) : 0xFF;
++    res_APDU[res_APDU_size++] = run && esp_ota_get_state_partition(run, &st) == ESP_OK ? (uint8_t)st : 0xFF;
++    res_APDU[res_APDU_size++] = flags;
++    res_APDU_size += put_uint32_be(d->secure_version, res_APDU + res_APDU_size);
++    res_APDU_size += put_uint32_be(esp_efuse_read_secure_version(), res_APDU + res_APDU_size);
++    res_APDU_size += put_uint32_be(run ? run->size : 0, res_APDU + res_APDU_size);
++    put_str(d->version, 32);
++    put_str(d->project_name, 32);
++    put_str(d->date, 16);
++    put_str(d->time, 16);
++    put_str(d->idf_ver, 32);
++    memcpy(res_APDU + res_APDU_size, d->app_elf_sha256, 32);
++    res_APDU_size += 32;
++    apdu.ne = res_APDU_size;
++    return SW_OK();
++}
++
++static int fw_update_begin(void) {
++    if (apdu.nc != 4) {
++        return SW_WRONG_LENGTH();
++    }
++    fwu_abort();
++    uint32_t total = get_uint32_be(apdu.data);
++    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
++    if (next == NULL) {
++        return SW_FILE_NOT_FOUND();
++    }
++    if (total == 0 || total > next->size) {
++        return SW_FILE_FULL();
++    }
++    if (!fwu_require_user_presence()) {
++        return SW_SECURITY_STATUS_NOT_SATISFIED();
++    }
++    /* Sequential mode erases sector by sector while writing, so no single
++     * command blocks for the time a 1 MB erase takes. */
++    if (esp_ota_begin(next, OTA_WITH_SEQUENTIAL_WRITES, &fwu_handle) != ESP_OK) {
++        return SW_EXEC_ERROR();
++    }
++    fwu_active = true;
++    fwu_part = next;
++    fwu_total = total;
++    fwu_written = 0;
++    printf("FWU: begin %lu bytes -> %s\n", (unsigned long)total, next->label);
++    return SW_OK();
++}
++
++static int fw_update_write(void) {
++    if (!fwu_active) {
++        return SW_CONDITIONS_NOT_SATISFIED();
++    }
++    if (apdu.nc <= 4) {
++        return SW_WRONG_LENGTH();
++    }
++    uint32_t offset = get_uint32_be(apdu.data);
++    uint32_t len = apdu.nc - 4;
++    if (offset != fwu_written || len > fwu_total - fwu_written) {
++        fwu_abort();
++        return SW_INCORRECT_PARAMS();
++    }
++    esp_err_t err = esp_ota_write(fwu_handle, apdu.data + 4, len);
++    if (err != ESP_OK) {
++        /* e.g. ESP_ERR_OTA_VALIDATE_FAILED for a wrong chip / header, or a
++         * lower secure version under anti-rollback */
++        printf("FWU: write at %lu failed: %s\n", (unsigned long)offset, esp_err_to_name(err));
++        fwu_abort();
++        return SW_DATA_INVALID();
++    }
++    fwu_written += len;
++    return SW_OK();
++}
++
++static int fw_update_end(void) {
++    if (!fwu_active) {
++        return SW_CONDITIONS_NOT_SATISFIED();
++    }
++    if (fwu_written != fwu_total) {
++        fwu_abort();
++        return SW_WRONG_LENGTH();
++    }
++    esp_err_t err = esp_ota_end(fwu_handle);   /* image + signature check */
++    fwu_active = false;
++    if (err != ESP_OK) {
++        printf("FWU: image rejected: %s\n", esp_err_to_name(err));
++        fwu_abort();
++        return SW_DATA_INVALID();
++    }
++    err = esp_ota_set_boot_partition(fwu_part);
++    if (err != ESP_OK) {
++        printf("FWU: set boot partition failed: %s\n", esp_err_to_name(err));
++        fwu_abort();
++        return SW_EXEC_ERROR();
++    }
++    printf("FWU: %s is the next boot slot\n", fwu_part->label);
++    fwu_part = NULL;
++    fwu_total = fwu_written = 0;
++    return SW_OK();
++}
++
++static int fw_update_cancel(void) {
++    fwu_abort();
++    return SW_OK();
++}
++
++static void fwu_restart_task(void *arg) {
++    (void)arg;
++    vTaskDelay(pdMS_TO_TICKS(500));   /* let the response reach the host */
++    esp_restart();
++}
++
++static int fw_update_reboot(void) {
++    if (fwu_active) {
++        return SW_CONDITIONS_NOT_SATISFIED();
++    }
++    xTaskCreate(fwu_restart_task, "fwu_restart", 2048, NULL, 1, NULL);
++    return SW_OK();
++}
++
++static const cmd_t cmds[] = {
++    { 0x01, fw_update_info },
++    { 0x10, fw_update_begin },
++    { 0x11, fw_update_write },
++    { 0x12, fw_update_end },
++    { 0x13, fw_update_cancel },
++    { 0x14, fw_update_reboot },
++    { 0x00, 0x0 }
++};
++
++static int fw_update_process_apdu(void) {
++    if (CLA(apdu) != 0x80) {
++        return SW_CLA_NOT_SUPPORTED();
++    }
++    for (const cmd_t *cmd = cmds; cmd->ins != 0x00; cmd++) {
++        if (cmd->ins == INS(apdu)) {
++            return cmd->cmd_handler();
++        }
++    }
++    return SW_INS_NOT_SUPPORTED();
++}
++
++static int fw_update_unload(void) {
++    fwu_abort();   /* another applet selected: drop a half-written image */
++    return PICOKEYS_OK;
++}
++
++static int fw_update_select(app_t *a, uint8_t force) {
++    (void)force;
++    a->process_apdu = fw_update_process_apdu;
++    a->unload = fw_update_unload;
++    res_APDU_size = 0;
++    return PICOKEYS_OK;
++}
++
++INITIALIZER ( fw_update_ctor ) {
++    register_app(fw_update_select, fw_update_aid);
++}
++
++#endif /* ESP_PLATFORM */
 diff --git a/src/led/led.c b/src/led/led.c
 index 145cafb..45d64a8 100644
 --- a/src/led/led.c
