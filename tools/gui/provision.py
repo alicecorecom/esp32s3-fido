@@ -121,6 +121,39 @@ def fetch_latest(dest, say):
     return tag
 
 
+def fetch_app(tag_kind, dest, say):
+    """The latest release's signed app for a B+ ('sb') or C ('rel') key, verified against its attested build.
+
+    Returns (path, release tag)."""
+    unsigned_profile = {"sb": "devsb", "rel": "release"}.get(tag_kind)
+    if unsigned_profile is None:
+        raise Stop("このキー（セキュアブートなし）向けの更新ファイルは Releases にありません。dev / devenc の zip の "
+                   "pico_fido.bin を「ファイルを選ぶ」で選んでください")
+    rel = json.loads(_get(f"https://api.github.com/repos/{REPO}/releases/latest", "application/vnd.github+json"))
+    tag = rel["tag_name"]
+    assets = {a["name"]: a["browser_download_url"] for a in rel["assets"]}
+    app = f"esp32s3-fido-{tag}-app-{tag_kind}.bin"
+    unsigned = f"esp32s3-fido-{tag}-{unsigned_profile}-unsigned.zip"
+    for name in (app, unsigned):
+        if name not in assets:
+            raise Stop(f"{tag} に {name} がありません")
+        say(f"ダウンロード：{name}")
+        with open(os.path.join(dest, name), "wb") as f:
+            f.write(_get(assets[name]))
+    gh = find_gh()
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            verify_release.verify(os.path.join(dest, app), os.path.join(dest, unsigned), public_keys(),
+                                  check_attestation=bool(gh))
+    except (verify_release.Fail, SystemExit, subprocess.CalledProcessError) as e:
+        raise Stop(f"{app} は本物と確かめられませんでした：{e}\n{out.getvalue()}")
+    say(out.getvalue().strip())
+    if not gh:
+        say("GitHub CLI（gh）が無いので、attestation の確認は省きました（署名の確認はしました）")
+    return os.path.join(dest, app), tag, bool(gh)
+
+
 class Firmware:
     """A verified pair of devsb / release zips."""
 

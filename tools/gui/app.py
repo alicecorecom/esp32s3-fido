@@ -97,6 +97,19 @@ class Worker(QObject):
         return self.pending == 0
 
 
+def relaunch_as_admin():
+    """Start this program again elevated (UAC prompt) and quit this one."""
+    import ctypes
+    import subprocess
+    if getattr(sys, "frozen", False):
+        exe, args = sys.executable, sys.argv[1:]
+    else:
+        exe, args = sys.executable, ["-I", os.path.abspath(sys.argv[0])] + sys.argv[1:]
+    r = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, subprocess.list2cmdline(args), os.getcwd(), 1)
+    if r > 32:                                      # started (the user accepted the UAC prompt)
+        QApplication.quit()
+
+
 def show_error(e):
     QMessageBox.warning(None, "エラー", explain(e))
 
@@ -115,6 +128,36 @@ def form_label(text=""):
     lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     lab.setWordWrap(True)
     return lab
+
+
+class TouchPrompt(QDialog):
+    """Shown while the key waits for BOOT / touch; closed when the call returns (or, for an
+    update, when writing starts)."""
+
+    def __init__(self, parent):
+        super().__init__(parent, Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+        self.setWindowTitle("キーで確認してください")
+        self.setModal(False)
+        lay = QVBoxLayout(self)
+        title = QLabel("キーの LED が青く点滅しています")
+        f = title.font()
+        f.setPointSize(f.pointSize() + 5)
+        f.setBold(True)
+        title.setFont(f)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+        body = QLabel("<b>BOOT ボタンを押す</b> か、<b>タッチパッドに触れて</b> ください。<br>15秒で時間切れになります。")
+        body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.setWordWrap(True)
+        lay.addWidget(body)
+        self.setMinimumWidth(420)
+
+    def show_centered(self, win):
+        self.adjustSize()
+        g = win.frameGeometry()
+        self.move(g.center().x() - self.width() // 2, g.center().y() - self.height() // 2)
+        self.show()
+        self.raise_()
 
 
 class Page(QWidget):
@@ -172,7 +215,7 @@ class OverviewPage(Page):
             return
         self.set("読み取り器", self.key.reader_name)
         self.run(self.key.fw_info, self.show_fw)
-        self.run(self.key.fido_info, self.show_fido)
+        self.run(self.key.fido_info, self.show_fido, self.fido_failed)
         self.run(self.key.device_info, self.show_dev)
 
     def show_fw(self, i):
@@ -188,6 +231,12 @@ class OverviewPage(Page):
         self.set("ELF SHA-256", i["elf_sha256"])
         lo = i["led_order"]
         self.set("LED の色順", "不明（古いファーム）" if lo is None else "既定（grb）" if lo == 0xFF else keydev.LED_ORDERS[lo])
+
+    def fido_failed(self, e):
+        if isinstance(e, KeyFailure) and str(e) == keydev.ADMIN_REQUIRED:
+            self.set("PIN", "管理者権限が要ります（「パスキー」タブから起動し直せます）")
+        else:
+            self.set("PIN", f"読めません：{explain(e)}")
 
     def show_fido(self, r):
         info, retries = r
@@ -213,6 +262,16 @@ class FidoPage(Page):
         super().__init__(win)
         self.pin = None             # kept in memory while this key stays selected
         lay = QVBoxLayout(self)
+
+        self.admin_box = QGroupBox("管理者権限が要ります")
+        h = QHBoxLayout(self.admin_box)
+        h.addWidget(form_label("Windows では、ブラウザと Windows 以外のアプリがパスキー（FIDO）を扱うには管理者権限が要ります。"
+                               "ほかのタブ（ワンタイムパスワード、OTP スロット、ファーム、キーを作る）は今のままで使えます。"), 1)
+        b = QPushButton("管理者として起動し直す")
+        b.clicked.connect(relaunch_as_admin)
+        h.addWidget(b)
+        self.admin_box.setVisible(keydev.is_windows_non_admin())
+        lay.addWidget(self.admin_box)
 
         g = QGroupBox("PIN")
         h = QHBoxLayout(g)
@@ -280,7 +339,14 @@ class FidoPage(Page):
     def refresh(self):
         if self.key is None:
             return
-        self.run(self.key.fido_info, self.show_info)
+        self.run(self.key.fido_info, self.show_info, self.info_failed)
+
+    def info_failed(self, e):
+        if isinstance(e, KeyFailure) and str(e) == keydev.ADMIN_REQUIRED:
+            self.admin_box.setVisible(True)
+            self.pin_label.setText("管理者権限が要ります（上のボタンから起動し直してください）")
+        else:
+            self.pin_label.setText(f"読めません：{explain(e)}")
 
     def show_info(self, r):
         info, retries = r
@@ -854,7 +920,10 @@ class FirmwarePage(Page):
         self.file_label = form_label("ファイルが選ばれていません")
         b = QPushButton("ファイルを選ぶ...")
         b.clicked.connect(self.choose)
+        dl = QPushButton("最新版をダウンロード")
+        dl.clicked.connect(self.download)
         h.addWidget(self.file_label, 1)
+        h.addWidget(dl)
         h.addWidget(b)
         v.addLayout(h)
         self.check_label = form_label("")
@@ -903,6 +972,30 @@ class FirmwarePage(Page):
             self.order.setCurrentText("default" if lo == 0xFF else keydev.LED_ORDERS[lo])
         self.check()
 
+    def download(self):
+        if self.info is None:
+            QMessageBox.information(self, "ファーム", "キーの状態を読み終わってから押してください")
+            return
+        import tempfile
+        import provision
+        kind = keydev.fwupdate.key_profile(self.info)
+        dest = tempfile.mkdtemp(prefix="esp32s3-fido-")
+        say = lambda text: None                     # noqa: E731  (the result line says what was checked)
+
+        def ok(r):
+            path, tag, attested = r
+            self.img = open(path, "rb").read()
+            self.file_label.setText(f"{os.path.basename(path)}（Releases の {tag}。作者の鍵の署名"
+                                    + ("と attestation" if attested else "") + " を確認済み）")
+            self.check()
+
+        def err(e):
+            if isinstance(e, provision.Stop):
+                QMessageBox.warning(self, "ダウンロード", str(e))
+            else:
+                show_error(e)
+        self.win.worker.run(lambda: provision.fetch_app(kind, dest, say), ok, err, "ダウンロードして確かめています")
+
     def choose(self):
         path, _ = QFileDialog.getOpenFileName(self, "ファームを選ぶ", os.path.expanduser("~/Downloads"),
                                               "アプリのイメージ (*.bin)")
@@ -941,7 +1034,13 @@ class FirmwarePage(Page):
         class Bridge(QObject):
             step = pyqtSignal(int, int)
         self.bridge = Bridge()
-        self.bridge.step.connect(lambda done, total: (self.progress.setMaximum(total), self.progress.setValue(done)))
+        def step(done, total):
+            if self.win.touch_prompt.isVisible():   # confirmed on the key: writing has started
+                self.win.touch_prompt.hide()
+                self.win.busy_label.setText("書き込んでいます。終わるまでキーを抜かないでください")
+            self.progress.setMaximum(total)
+            self.progress.setValue(done)
+        self.bridge.step.connect(step)
 
         def ok(_):
             self.progress.setVisible(False)
@@ -1173,6 +1272,7 @@ class MainWindow(QMainWindow):
         self.key = None
         self.worker = Worker()
         self.worker.busy_changed.connect(self.busy)
+        self.touch_prompt = TouchPrompt(self)
 
         central = QWidget()
         lay = QVBoxLayout(central)
@@ -1201,6 +1301,10 @@ class MainWindow(QMainWindow):
 
     def busy(self, text):
         self.busy_label.setText(text)
+        if text == TOUCH:
+            self.touch_prompt.show_centered(self)
+        else:
+            self.touch_prompt.hide()
 
     def rescan(self):
         if self.worker.idle:

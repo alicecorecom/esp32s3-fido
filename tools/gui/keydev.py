@@ -36,6 +36,20 @@ class KeyFailure(Exception):
     """An error to show to the user as it is."""
 
 
+ADMIN_REQUIRED = ("Windows では、パスキー（FIDO）の管理に管理者権限が要ります。"
+                  "「パスキー」タブの「管理者として起動し直す」を使ってください。")
+
+
+def is_windows_non_admin():
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return not ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
 READER_NAME = "ESP32-S3 FIDO2 Key"     # USB product string (patches/pico-fido-esp32s3.patch)
 
 
@@ -101,6 +115,10 @@ class Key:
         try:
             d = CtapPcscDevice(r.createConnection(), str(r))
         except Exception as e:
+            # Windows lets only elevated processes select the FIDO applet over PC/SC
+            # (SCARD_E_NO_ACCESS), as it does for FIDO over HID; OATH / OTP / updates are fine
+            if "0x80100027" in str(e):
+                raise KeyFailure(ADMIN_REQUIRED)
             raise KeyFailure(f"FIDO の窓口に接続できません（{e}）")
         try:
             yield Ctap2(d)

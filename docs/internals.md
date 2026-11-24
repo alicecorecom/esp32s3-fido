@@ -120,7 +120,7 @@ AAGUID は認証器の機種を表す ID。本家のままだと pico-fido と�
 
 - AAGUID は登録時にだけ送られるので、変えても既存の登録はそのまま使える
 - attestation を求めないサイトや、自己署名の attestation では、ブラウザ / OS が AAGUID をゼロに置き換えてサイトに渡すことがある
-- キーが名乗っている値は `tools/ccid/getinfo.py` で確認できる（CCID 経由。管理者権限は要らない）
+- キーが名乗っている値は `tools/ccid/getinfo.py` で確認できる（CCID 経由。Windows では FIDO の窓口を開くので管理者権限が要る）
 
 ```powershell
 uv run --no-project --with pyscard python -I tools\ccid\getinfo.py
