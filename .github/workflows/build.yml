@@ -60,6 +60,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
+          . "$IDF_PATH/export.sh" > /dev/null   # cmake for the zips
           if [ "$REF_TYPE" = tag ]; then version=$REF_NAME; else version=git-${GITHUB_SHA::7}; fi
           sh ci/package.sh "$version"
 
